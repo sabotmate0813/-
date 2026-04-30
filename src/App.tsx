@@ -39,8 +39,17 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const [draftPortfolio, setDraftPortfolio] = useState<PortfolioItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [dataReady, setDataReady] = useState({ portfolio: false, categories: false });
   const [isSaving, setIsSaving] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+
+  // Combined loading control
+  useEffect(() => {
+    if (dataReady.portfolio && dataReady.categories && activeCategory) {
+      const timer = setTimeout(() => setIsLoading(false), 800); // Small buffer for smooth entry
+      return () => clearTimeout(timer);
+    }
+  }, [dataReady, activeCategory]);
   
   const [adminSelectedCat, setAdminSelectedCat] = useState<string>('');
   const [adminSelectedSub, setAdminSelectedSub] = useState<string>('');
@@ -161,6 +170,7 @@ export default function App() {
           setCategories(fallback);
           if (!adminSelectedCat) setAdminSelectedCat(fallback[0].name);
         }
+        setDataReady(prev => ({ ...prev, categories: true }));
       });
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'categories');
@@ -198,14 +208,14 @@ export default function App() {
           setPortfolio(INITIAL_PORTFOLIO);
           setDraftPortfolio(INITIAL_PORTFOLIO);
         }
+        setDataReady(prev => ({ ...prev, portfolio: true }));
       } catch (error) {
         console.error('Error fetching data:', error);
-      } finally {
-        setIsLoading(false);
+        setDataReady(prev => ({ ...prev, portfolio: true }));
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'portfolio');
-      setIsLoading(false);
+      setDataReady(prev => ({ ...prev, portfolio: true }));
     });
 
     return () => unsubscribe();
@@ -686,7 +696,7 @@ export default function App() {
                       referrerPolicy="no-referrer"
                     />
                   </motion.div>
-                ) : (
+                ) : !isLoading && activeCategory ? (
                   <div className="flex flex-col items-center justify-center py-40 text-center space-y-6">
                     <div className="w-20 h-20 rounded-full bg-black/5 flex items-center justify-center mb-4">
                       <ImageIcon size={32} className="text-black/10" />
@@ -705,7 +715,7 @@ export default function App() {
                       View Home
                     </button>
                   </div>
-                )}
+                ) : null}
               </AnimatePresence>
 
               {isAdminAuthenticated && allCategoryImages.length > 0 && (
@@ -1184,6 +1194,26 @@ export default function App() {
                 </div>
               )}
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isLoading && (
+          <motion.div 
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.8, ease: "easeInOut" }}
+            className="fixed inset-0 z-[500] bg-white flex flex-col items-center justify-center space-y-6"
+          >
+            <div className="text-2xl font-bold tracking-[0.3em] uppercase animate-pulse">SKETCHNUB</div>
+            <div className="w-12 h-[1px] bg-black/10 relative overflow-hidden">
+              <motion.div 
+                animate={{ x: [-48, 48] }}
+                transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                className="absolute inset-0 bg-black w-full"
+              />
+            </div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.5em] text-black/20">Initialising Core</p>
           </motion.div>
         )}
       </AnimatePresence>
