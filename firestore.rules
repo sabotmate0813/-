@@ -34,13 +34,16 @@ service cloud.firestore {
 
     function isValidPortfolioItem(data) {
       return data.keys().hasAll(['id', 'category', 'title', 'images']) &&
-             data.id is string && data.id.size() <= 64 &&
-             data.category is string && data.category.size() <= 32 &&
-             data.application is string && data.application.size() <= 64 &&
-             data.title is string && data.title.size() <= 200 &&
-             data.description is string && data.description.size() <= 2000 &&
-             data.images is list && data.images.size() <= 100 &&
-             (data.images.size() == 0 || (data.images[0].url is string && data.images[0].url.size() <= 1000000));
+             data.id is string && data.id.size() <= 128 &&
+             data.category is string && data.category.size() <= 64 &&
+             data.title is string && data.title.size() <= 512 &&
+             // Optional fields with existence checks
+             (!('application' in data) || (data.application is string && data.application.size() <= 128)) &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 10000)) &&
+             (!('client' in data) || (data.client is string && data.client.size() <= 512)) &&
+             (!('role' in data) || (data.role is string && data.role.size() <= 512)) &&
+             (!('process' in data) || (data.process is list)) &&
+             data.images is list && data.images.size() <= 50;
     }
 
     match /portfolio/{itemId} {

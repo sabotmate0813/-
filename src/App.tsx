@@ -32,6 +32,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const [draftPortfolio, setDraftPortfolio] = useState<PortfolioItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   
   // Auth state listener
   useEffect(() => {
@@ -119,6 +120,9 @@ export default function App() {
   };
 
   const handleBulkSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    
     try {
       const batch = writeBatch(db);
       
@@ -136,19 +140,33 @@ export default function App() {
       
       // 3. Set/Update all items in draft
       draftPortfolio.forEach(item => {
-        batch.set(doc(db, 'portfolio', item.id), {
+        // Enforce basic fields even if user left them empty (for rule compliance)
+        const validatedItem = {
           ...item,
+          application: item.application || '',
+          description: item.description || '',
+          client: item.client || '',
+          role: item.role || '',
+          process: item.process || [],
           updatedAt: new Date().toISOString()
-        });
+        };
+        batch.set(doc(db, 'portfolio', item.id), validatedItem);
       });
       
       await batch.commit();
       
       setIsAdminMode(false);
+      setIsAdminAuthenticated(false);
       alert('변경사항이 성공적으로 저장되었습니다.');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving portfolio:', error);
-      handleFirestoreError(error, OperationType.WRITE, 'portfolio');
+      if (error?.message?.includes('too large') || error?.code === 'resource-exhausted') {
+        alert('저장 실패: 이미지 용량이 너무 컸거나 문서 크기 제한(1MB)을 초과했습니다. 고해상도 이미지는 개수를 줄이거나 용량을 압축하여 올려주세요.');
+      } else {
+        alert(`저장 중 오류가 발생했습니다: ${error?.message || '잠시 후 다시 시도해주세요.'}`);
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -493,10 +511,15 @@ export default function App() {
                 </button>
                 <button 
                   onClick={handleBulkSave}
-                  disabled={!isAdminAuthenticated}
-                  className="px-6 py-2 bg-[#7557F1] text-white rounded-lg text-sm font-bold shadow-lg shadow-purple-500/20 hover:opacity-90 transition-opacity disabled:grayscale"
+                  disabled={!isAdminAuthenticated || isSaving}
+                  className={`px-6 py-2 rounded-lg text-sm font-bold shadow-lg transition-all flex items-center gap-2 ${isSaving ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#7557F1] text-white shadow-purple-500/20 hover:opacity-90 disabled:grayscale'}`}
                 >
-                  변경사항 저장
+                  {isSaving ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      저장 중...
+                    </>
+                  ) : '변경사항 저장'}
                 </button>
               </div>
             </header>
