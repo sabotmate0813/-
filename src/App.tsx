@@ -44,6 +44,7 @@ export default function App() {
   
   const [adminSelectedCat, setAdminSelectedCat] = useState<string>('');
   const [adminSelectedSub, setAdminSelectedSub] = useState<string>('');
+  const [adminSelectedProjectId, setAdminSelectedProjectId] = useState<string>('');
 
   // Handle default active category once categories are loaded
   useEffect(() => {
@@ -52,43 +53,65 @@ export default function App() {
     }
   }, [categories, activeCategory]);
 
-  // Effect to reset sub-category selection when main category changes
+  // Effect to reset selection when main category changes
   useEffect(() => {
     const cat = categories.find(c => c.name === adminSelectedCat);
     if (cat && cat.subCategories.length > 0) {
-      // Only force selection if current sub is invalid and not empty
       if (adminSelectedSub && !cat.subCategories.some(s => s.name === adminSelectedSub)) {
         setAdminSelectedSub('');
       }
     } else {
       setAdminSelectedSub('');
     }
+    // Also reset project selection
+    setAdminSelectedProjectId('');
   }, [adminSelectedCat, categories, adminSelectedSub]);
+
+  // Find all projects matching the current category/sub-category selection
+  const matchingAdminProjects = useMemo(() => {
+    if (!adminSelectedCat) return [];
+    
+    return draftPortfolio.filter(p => {
+      const catMatch = p.category === adminSelectedCat;
+      // If we've selected a sub-category, match strictly
+      if (adminSelectedSub) {
+        return catMatch && p.application === adminSelectedSub;
+      }
+      
+      // If we've selected "None", match projects with NO sub-category 
+      // OR projects with a sub-category that NO LONGER EXISTS in the definition
+      const catDef = categories.find(c => c.name === adminSelectedCat);
+      const isValidSub = catDef?.subCategories.some(s => s.name === p.application);
+      
+      return catMatch && (!p.application || !isValidSub);
+    });
+  }, [draftPortfolio, adminSelectedCat, adminSelectedSub, categories]);
 
   // Find or create current project for admin
   const currentAdminProject = useMemo(() => {
     if (!adminSelectedCat) return null;
     
-    // Improved matching: treat undefined/null/empty string as equivalent for application
-    let item = draftPortfolio.find(p => {
-      const catMatch = p.category === adminSelectedCat;
-      const subMatch = (p.application || '') === (adminSelectedSub || '');
-      return catMatch && subMatch;
-    });
-    
-    if (!item && adminSelectedCat) {
-      // Create empty template if not found
-      item = {
-        id: `template_${adminSelectedCat}_${adminSelectedSub || 'main'}`.replace(/\s+/g, '_'),
-        category: adminSelectedCat,
-        application: adminSelectedSub || '',
-        title: `${adminSelectedCat}${adminSelectedSub ? ' - ' + adminSelectedSub : ''}`,
-        description: '',
-        images: []
-      };
+    // Try to find by explicit ID if selected
+    if (adminSelectedProjectId) {
+      const item = draftPortfolio.find(p => p.id === adminSelectedProjectId);
+      if (item) return item;
     }
-    return item;
-  }, [draftPortfolio, adminSelectedCat, adminSelectedSub]);
+
+    // Otherwise use the first matching project
+    if (matchingAdminProjects.length > 0) {
+      return matchingAdminProjects[0];
+    }
+    
+    // Create empty template if not found
+    return {
+      id: `template_${adminSelectedCat}_${adminSelectedSub || 'main'}_${Date.now()}`.replace(/\s+/g, '_'),
+      category: adminSelectedCat,
+      application: adminSelectedSub || '',
+      title: `${adminSelectedCat}${adminSelectedSub ? ' - ' + adminSelectedSub : ''}`,
+      description: '',
+      images: []
+    } as PortfolioItem;
+  }, [matchingAdminProjects, adminSelectedCat, adminSelectedSub, adminSelectedProjectId, draftPortfolio]);
   
   // Auth state listener
   useEffect(() => {
@@ -206,6 +229,13 @@ export default function App() {
     return portfolio.filter(item => item.category === activeCategory);
   }, [portfolio, activeCategory, categories]);
 
+  const getValidSubCategory = (category: string, sub: string) => {
+    const cat = categories.find(c => c.name === category);
+    if (!cat) return null;
+    const subExists = cat.subCategories.some(s => s.name === sub);
+    return subExists ? sub : null;
+  };
+
   const allCategoryImages = useMemo(() => {
     const images: { url: string; title: string; item: PortfolioItem; idx: number }[] = [];
     filteredPortfolio.forEach(item => {
@@ -303,10 +333,15 @@ export default function App() {
         // Split images: Store them separately to bypass 1MB limit
         const { images, ...mainData } = item;
         
+        // Clean application if it's not a valid sub-category
+        const catDef = categories.find(c => c.name === item.category);
+        const isValidSub = catDef?.subCategories.some(s => s.name === item.application);
+        const cleanedApplication = isValidSub ? item.application : '';
+
         const validatedMainItem = {
           ...mainData,
           images: [], // We keep the array empty in main doc OR store only thumbnails here
-          application: item.application || '',
+          application: cleanedApplication || '',
           description: item.description || '',
           client: item.client || '',
           role: item.role || '',
@@ -683,9 +718,11 @@ export default function App() {
             {/* Title below image */}
             {allCategoryImages.length > 0 && allCategoryImages[currentFlatIdx] && (
               <div className="mt-12 text-center">
-                <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-black/40 mb-2">
-                  {allCategoryImages[currentFlatIdx].item.application}
-                </p>
+                {getValidSubCategory(allCategoryImages[currentFlatIdx].item.category, allCategoryImages[currentFlatIdx].item.application || '') && (
+                  <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-black/40 mb-2">
+                    {allCategoryImages[currentFlatIdx].item.application}
+                  </p>
+                )}
                 <h3 className="text-3xl font-medium tracking-tight text-brand-text">
                   {allCategoryImages[currentFlatIdx].title}
                 </h3>
@@ -813,7 +850,7 @@ export default function App() {
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-gray-100 pb-10">
                       <div className="space-y-6 flex-1">
                         <h3 className="text-xl font-bold uppercase tracking-widest text-brand-text">Image Management</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                           <div className="space-y-2">
                             <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">SELECT CATEGORY</label>
                             <select 
@@ -833,12 +870,26 @@ export default function App() {
                               onChange={(e) => setAdminSelectedSub(e.target.value)}
                               className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer font-bold"
                             >
-                              <option value="">None (Main Category Only)</option>
+                              <option value="">None / Orphaned</option>
                               {categories.find(c => c.name === adminSelectedCat)?.subCategories.map(sub => (
                                 <option key={sub.id} value={sub.name}>{sub.name}</option>
                               ))}
                             </select>
                           </div>
+                          {matchingAdminProjects.length > 1 && (
+                            <div className="space-y-2 animate-in fade-in zoom-in-95 duration-300">
+                              <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">SELECT PROJECT</label>
+                              <select 
+                                value={adminSelectedProjectId}
+                                onChange={(e) => setAdminSelectedProjectId(e.target.value)}
+                                className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer font-bold border-2 border-brand-text/20"
+                              >
+                                {matchingAdminProjects.map(p => (
+                                  <option key={p.id} value={p.id}>{p.title || 'Untitled'}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1097,7 +1148,8 @@ export default function App() {
                           <div className="flex justify-between items-start mb-4">
                             <div className="space-y-1">
                               <span className="text-[8px] font-bold uppercase tracking-widest text-black/30">
-                                {item.category} {item.application ? `> ${item.application}` : ''}
+                                {item.category} 
+                                {getValidSubCategory(item.category, item.application || '') ? ` > ${item.application}` : ''}
                               </span>
                               <h4 className="font-bold text-brand-text truncate pr-4">{item.title || 'Untitled Project'}</h4>
                             </div>

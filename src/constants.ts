@@ -5,7 +5,7 @@ export const INITIAL_PORTFOLIO: PortfolioItem[] = [
     id: '1',
     category: 'Illustration',
     title: 'Forest Guardian',
-    application: 'Conceptual Art',
+    application: '',
     description: 'A mystical character illustration in a glowing forest environment.',
     images: [
       { url: 'https://picsum.photos/seed/forest/800/1000', title: 'Forest Guardian - Primary' },
@@ -19,7 +19,7 @@ export const INITIAL_PORTFOLIO: PortfolioItem[] = [
     id: '2',
     category: 'Sketch',
     title: 'Anatomy Study #04',
-    application: 'Fine Art',
+    application: '',
     description: 'Detailed pencil study of muscular structures and dynamic posing.',
     images: [{ url: 'https://picsum.photos/seed/sketch/800/1200', title: 'Anatomy Study - Pencil' }],
     process: ['Rough Gesture', 'Muscle Construction', 'Pencil Shading']
@@ -28,7 +28,7 @@ export const INITIAL_PORTFOLIO: PortfolioItem[] = [
     id: '3',
     category: 'Dot Art',
     title: 'Cyberpunk Room',
-    application: 'Environment Design',
+    application: '',
     description: '16-bit isometric pixel art of a futuristic living space.',
     images: [{ url: 'https://picsum.photos/seed/pixel/800/800', title: 'Cyberpunk Room - Pixel Art' }],
     process: ['Grid Setup', 'Tile Mapping', 'Animation Frames']
