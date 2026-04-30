@@ -416,6 +416,16 @@ export default function App() {
   };
 
   const compressImage = (file: File): Promise<string> => {
+    // If it's a GIF, don't compress using canvas because it breaks animation
+    if (file.type === 'image/gif') {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
@@ -983,7 +993,7 @@ export default function App() {
                             <label className="w-full flex flex-col items-center justify-center p-12 border-2 border-dashed border-black/10 rounded-[30px] hover:border-brand-text hover:bg-white transition-all cursor-pointer group">
                               <ImageIcon size={32} className="text-black/10 group-hover:text-brand-text mb-4" />
                               <span className="text-sm font-bold text-brand-text uppercase tracking-widest text-[10px]">Add New Pictures</span>
-                              <span className="text-[8px] text-brand-muted mt-2 uppercase tracking-widest opacity-60">JPG, PNG up to 1MB each</span>
+                              <span className="text-[8px] text-brand-muted mt-2 uppercase tracking-widest opacity-60">JPG, PNG, GIF up to 1MB each</span>
                               <input 
                                 type="file" 
                                 multiple 
