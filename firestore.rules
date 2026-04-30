@@ -1,0 +1,64 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      // Hardcoded admin for the requester
+      return isSignedIn() && 
+             request.auth.token.email == 'sabotmate0813@gmail.com' && 
+             request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidPortfolioItem(data) {
+      return data.keys().hasAll(['id', 'category', 'title', 'images']) &&
+             data.id is string && data.id.size() <= 64 &&
+             data.category is string && data.category.size() <= 32 &&
+             data.application is string && data.application.size() <= 64 &&
+             data.title is string && data.title.size() <= 200 &&
+             data.description is string && data.description.size() <= 2000 &&
+             data.images is list && data.images.size() <= 100 &&
+             (data.images.size() == 0 || (data.images[0].url is string && data.images[0].url.size() <= 1000000));
+    }
+
+    match /portfolio/{itemId} {
+      allow get: if true;
+      allow list: if true;
+      
+      allow create: if isAdmin() && 
+                      isValidId(itemId) && 
+                      isValidPortfolioItem(incoming()) &&
+                      incoming().id == itemId;
+                      
+      allow update: if isAdmin() && 
+                      isValidId(itemId) && 
+                      isValidPortfolioItem(incoming()) &&
+                      // Basic immutability
+                      incoming().id == existing().id;
+                      
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "PortfolioItem": {
+      "title": "Portfolio Item",
+      "description": "A single entry in the portfolio gallery",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "category": { "type": "string" },
+        "application": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          }
+        },
+        "client": { "type": "string" },
+        "role": { "type": "string" },
+        "process": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "category", "title", "images"]
+    }
+  },
+  "firestore": {
+    "/portfolio/{itemId}": {
+      "schema": "PortfolioItem",
+      "description": "Collection of all portfolio items"
+    }
+  }
+}

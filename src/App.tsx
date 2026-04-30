@@ -8,10 +8,18 @@ import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { 
   Menu, X, Instagram, Mail, ArrowRight, CheckCircle2, 
   ExternalLink, ChevronLeft, ChevronRight, Settings, 
-  Dribbble, Github, Image as ImageIcon, GripVertical
+  Dribbble, Github, Image as ImageIcon, GripVertical,
+  LogOut
 } from 'lucide-react';
 import { Category, PortfolioItem } from './types';
 import { INITIAL_PORTFOLIO, CATEGORIES } from './constants';
+import { 
+  db, auth, signInWithGoogle, handleFirestoreError, OperationType 
+} from './lib/firebase';
+import { 
+  collection, getDocs, doc, setDoc, deleteDoc, writeBatch, onSnapshot, query, orderBy 
+} from 'firebase/firestore';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 
 export default function App() {
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
@@ -20,44 +28,47 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProjectsHovered, setIsProjectsHovered] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const [draftPortfolio, setDraftPortfolio] = useState<PortfolioItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   
-  // Initialize portfolio from localStorage or constants
+  // Auth state listener
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('sketchnub_portfolio');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Migration: convert imageUrls to images if necessary
-          const migrated = parsed.map((item: any) => {
-            if (item.imageUrls && !item.images) {
-              return {
-                ...item,
-                images: item.imageUrls.map((url: string) => ({ url, title: item.title })),
-                imageUrls: undefined
-              };
-            }
-            return item;
-          });
-          setPortfolio(migrated);
-          setDraftPortfolio(migrated);
-        } else {
-          setPortfolio(INITIAL_PORTFOLIO);
-          setDraftPortfolio(INITIAL_PORTFOLIO);
-        }
+    return onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      // Hardcoded admin check matching firestore.rules
+      setIsAdminAuthenticated(user?.email === 'sabotmate0813@gmail.com' && user?.emailVerified === true);
+    });
+  }, []);
+
+  // Initialize portfolio from Firestore
+  useEffect(() => {
+    const portfolioRef = collection(db, 'portfolio');
+    const q = query(portfolioRef);
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const items: PortfolioItem[] = [];
+      snapshot.forEach((doc) => {
+        items.push(doc.data() as PortfolioItem);
+      });
+      
+      if (items.length > 0) {
+        setPortfolio(items);
+        setDraftPortfolio(items);
       } else {
+        // Only if empty, use initial
         setPortfolio(INITIAL_PORTFOLIO);
         setDraftPortfolio(INITIAL_PORTFOLIO);
       }
-    } catch (error) {
-      console.error('Error loading portfolio:', error);
-      setPortfolio(INITIAL_PORTFOLIO);
-      setDraftPortfolio(INITIAL_PORTFOLIO);
-    }
-  }, [isAdminAuthenticated]);
+      setIsLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'portfolio');
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const filteredPortfolio = useMemo(() => {
     if (activeCategory === 'All') return portfolio;
@@ -92,29 +103,51 @@ export default function App() {
     }
   }, [activeCategory, allCategoryImages.length, currentFlatIdx]);
 
-  const handleAdminAuth = () => {
-    if (adminPassword === '2892') {
-      setIsAdminAuthenticated(true);
-      setAdminPassword('');
-    } else {
-      alert('비밀번호가 올바르지 않습니다.');
+  const handleAdminAuth = async () => {
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error('Login error:', error);
+      alert('로그인 중 오류가 발생했습니다.');
     }
   };
 
-  const handleBulkSave = () => {
+  const handleLogout = async () => {
+    await signOut(auth);
+    setIsAdminMode(false);
+  };
+
+  const handleBulkSave = async () => {
     try {
-      setPortfolio(draftPortfolio);
-      localStorage.setItem('sketchnub_portfolio', JSON.stringify(draftPortfolio));
-      setIsAdminAuthenticated(false);
+      const batch = writeBatch(db);
+      
+      // 1. Get current IDs in DB to handle deletions
+      const snapshot = await getDocs(collection(db, 'portfolio'));
+      const dbIds = snapshot.docs.map(doc => doc.id);
+      const draftIds = draftPortfolio.map(item => item.id);
+      
+      // 2. Delete items that were removed in draft
+      dbIds.forEach(id => {
+        if (!draftIds.includes(id)) {
+          batch.delete(doc(db, 'portfolio', id));
+        }
+      });
+      
+      // 3. Set/Update all items in draft
+      draftPortfolio.forEach(item => {
+        batch.set(doc(db, 'portfolio', item.id), {
+          ...item,
+          updatedAt: new Date().toISOString()
+        });
+      });
+      
+      await batch.commit();
+      
       setIsAdminMode(false);
       alert('변경사항이 성공적으로 저장되었습니다.');
     } catch (error) {
       console.error('Error saving portfolio:', error);
-      if (error instanceof Error && error.name === 'QuotaExceededError') {
-        alert('저장 공간이 부족합니다. 이미지 용량을 줄이거나 개수를 조절해주세요 (최대 약 5MB).');
-      } else {
-        alert('저장 중 오류가 발생했습니다.');
-      }
+      handleFirestoreError(error, OperationType.WRITE, 'portfolio');
     }
   };
 
@@ -439,7 +472,17 @@ export default function App() {
           >
             {/* Admin Header */}
             <header className="sticky top-0 z-10 bg-brand-accent/80 backdrop-blur-md border-b border-black/5 px-8 h-20 flex items-center justify-between">
-              <h2 className="text-xl font-bold tracking-tight">SKETCHNUB 관리자</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-xl font-bold tracking-tight">SKETCHNUB 관리자</h2>
+                {isAdminAuthenticated && (
+                  <button 
+                    onClick={handleLogout}
+                    className="flex items-center gap-1 text-[10px] bg-black/5 px-3 py-1 rounded-full text-black/40 hover:text-black transition-colors"
+                  >
+                    <LogOut size={12} /> Logout
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-6">
                 <button 
                   onClick={() => { setIsAdminMode(false); setIsAdminAuthenticated(false); }}
@@ -463,24 +506,33 @@ export default function App() {
                   <div className="text-center">
                     <Settings className="mx-auto mb-6 text-brand-text" size={48} />
                     <h3 className="text-3xl font-serif">Admin Access</h3>
-                    <p className="text-brand-muted mt-2">관리자 암호를 입력해주세요.</p>
+                    <p className="text-brand-muted mt-2">
+                      {currentUser ? '관리자 권한이 없습니다.' : '구글 로그인이 필요합니다.'}
+                    </p>
                   </div>
                   
                   <div className="w-full max-w-sm space-y-4">
-                    <input 
-                      type="password" 
-                      placeholder="Password"
-                      value={adminPassword}
-                      onChange={(e) => setAdminPassword(e.target.value)}
-                      className="w-full px-6 py-4 bg-brand-accent rounded-2xl border-2 border-transparent focus:border-brand-text outline-none transition-all text-center text-xl tracking-widest"
-                      onKeyPress={(e) => e.key === 'Enter' && handleAdminAuth()}
-                    />
-                    <button 
-                      onClick={handleAdminAuth}
-                      className="w-full py-4 bg-brand-text text-white rounded-2xl font-bold shadow-xl hover:bg-brand-muted transition-colors"
-                    >
-                      Login to Dashboard
-                    </button>
+                    {!currentUser ? (
+                      <button 
+                        onClick={handleAdminAuth}
+                        className="w-full py-4 bg-brand-text text-white rounded-2xl font-bold shadow-xl hover:bg-brand-muted transition-colors flex items-center justify-center gap-3"
+                      >
+                        <Instagram size={20} /> Login with Google
+                      </button>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="p-4 bg-red-50 text-red-600 rounded-xl text-center text-sm">
+                          접속 계정: {currentUser.email}<br/>
+                          관리자 전용 계정으로 로그인해주세요.
+                        </div>
+                        <button 
+                          onClick={handleLogout}
+                          className="w-full py-4 bg-black text-white rounded-2xl font-bold shadow-xl transition-colors"
+                        >
+                          다른 계정으로 로그인
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
