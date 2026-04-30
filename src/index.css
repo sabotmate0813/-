@@ -1,0 +1,87 @@
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Pretendard Variable", "Pretendard", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+  --font-serif: "Pretendard Variable", "Pretendard", sans-serif;
+  
+  --color-brand-bg: #ffffff;
+  --color-brand-accent: #f8f8f8;
+  --color-brand-text: #1a1a1a;
+  --color-brand-muted: #888888;
+}
+
+@layer base {
+  body {
+    @apply bg-brand-bg text-brand-text font-sans antialiased overflow-x-hidden;
+    scroll-behavior: smooth;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold tracking-tighter;
+  }
+}
+
+.cinematic-slider {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.cinematic-slider::-webkit-scrollbar {
+  display: none;
+}
+
+.cinematic-slide {
+  flex: 0 0 auto;
+  width: 90vw;
+  scroll-snap-align: center;
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@screen md {
+  .cinematic-slide {
+    width: 60vw;
+  }
+}
+
+.cinematic-slide:hover {
+  transform: scale(1.02);
+}
+
+.image-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.image-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 3s infinite;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
