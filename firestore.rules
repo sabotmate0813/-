@@ -69,5 +69,15 @@ service cloud.firestore {
         allow write: if isAdmin() && isValidId(imageId);
       }
     }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidId(categoryId);
+
+      match /subcategories/{subcategoryId} {
+        allow read: if true;
+        allow write: if isAdmin() && isValidId(subcategoryId);
+      }
+    }
   }
 }

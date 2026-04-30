@@ -47,6 +47,28 @@
         }
       },
       "description": "Individual images for a portfolio item to bypass 1MB document limit"
+    },
+    "/categories/{categoryId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "order": { "type": "integer" }
+        },
+        "required": ["name"]
+      },
+      "description": "Dynamic top-level categories"
+    },
+    "/categories/{categoryId}/subcategories/{subcategoryId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "order": { "type": "integer" }
+        },
+        "required": ["name"]
+      },
+      "description": "Sub-categories belonging to a specific main category"
     }
   }
 }

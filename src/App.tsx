@@ -21,9 +21,16 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
+interface CategoryData {
+  id: string;
+  name: string;
+  subCategories: { id: string; name: string }[];
+}
+
 export default function App() {
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
-  const [activeCategory, setActiveCategory] = useState<Category>('Illustration');
+  const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [activeCategory, setActiveCategory] = useState<string>('');
   const [currentFlatIdx, setCurrentFlatIdx] = useState(0);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProjectsHovered, setIsProjectsHovered] = useState(false);
@@ -33,6 +40,55 @@ export default function App() {
   const [draftPortfolio, setDraftPortfolio] = useState<PortfolioItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  
+  const [adminSelectedCat, setAdminSelectedCat] = useState<string>('');
+  const [adminSelectedSub, setAdminSelectedSub] = useState<string>('');
+
+  // Handle default active category once categories are loaded
+  useEffect(() => {
+    if (categories.length > 0 && !activeCategory) {
+      setActiveCategory(categories[0].name);
+    }
+  }, [categories, activeCategory]);
+
+  // Effect to reset sub-category selection when main category changes
+  useEffect(() => {
+    const cat = categories.find(c => c.name === adminSelectedCat);
+    if (cat && cat.subCategories.length > 0) {
+      // Only force selection if current sub is invalid and not empty
+      if (adminSelectedSub && !cat.subCategories.some(s => s.name === adminSelectedSub)) {
+        setAdminSelectedSub('');
+      }
+    } else {
+      setAdminSelectedSub('');
+    }
+  }, [adminSelectedCat, categories, adminSelectedSub]);
+
+  // Find or create current project for admin
+  const currentAdminProject = useMemo(() => {
+    if (!adminSelectedCat) return null;
+    
+    // Improved matching: treat undefined/null/empty string as equivalent for application
+    let item = draftPortfolio.find(p => {
+      const catMatch = p.category === adminSelectedCat;
+      const subMatch = (p.application || '') === (adminSelectedSub || '');
+      return catMatch && subMatch;
+    });
+    
+    if (!item && adminSelectedCat) {
+      // Create empty template if not found
+      item = {
+        id: `template_${adminSelectedCat}_${adminSelectedSub || 'main'}`.replace(/\s+/g, '_'),
+        category: adminSelectedCat,
+        application: adminSelectedSub || '',
+        title: `${adminSelectedCat}${adminSelectedSub ? ' - ' + adminSelectedSub : ''}`,
+        description: '',
+        images: []
+      };
+    }
+    return item;
+  }, [draftPortfolio, adminSelectedCat, adminSelectedSub]);
   
   // Auth state listener
   useEffect(() => {
@@ -41,6 +97,53 @@ export default function App() {
       // Hardcoded admin check matching firestore.rules
       setIsAdminAuthenticated(user?.email === 'sabotmate0813@gmail.com' && user?.emailVerified === true);
     });
+  }, []);
+
+  // Initialize categories and their sub-categories from Firestore
+  useEffect(() => {
+    const categoriesRef = collection(db, 'categories');
+    const q = query(categoriesRef, orderBy('order', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const catPromises = snapshot.docs.map(async (docSnap) => {
+        const catId = docSnap.id;
+        const catData = docSnap.data();
+        
+        const subRef = collection(db, `categories/${catId}/subcategories`);
+        const subSnapshot = await getDocs(query(subRef, orderBy('order', 'asc')));
+        const subItems = subSnapshot.docs.map(d => ({ 
+          id: d.id, 
+          name: d.data().name 
+        }));
+
+        return {
+          id: catId,
+          name: catData.name,
+          subCategories: subItems
+        };
+      });
+
+      Promise.all(catPromises).then(cats => {
+        if (cats.length > 0) {
+          setCategories(cats);
+          if (!adminSelectedCat) setAdminSelectedCat(cats[0].name);
+        } else {
+          const fallback = CATEGORIES.filter(c => c !== 'All').map(c => ({
+            id: c.toLowerCase().replace(/\s+/g, '-'),
+            name: c,
+            subCategories: c === 'Projects' 
+              ? ['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].map(s => ({ id: s.toLowerCase(), name: s }))
+              : []
+          }));
+          setCategories(fallback);
+          if (!adminSelectedCat) setAdminSelectedCat(fallback[0].name);
+        }
+      });
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'categories');
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Initialize portfolio from Firestore
@@ -86,13 +189,22 @@ export default function App() {
   }, []);
 
   const filteredPortfolio = useMemo(() => {
-    if (activeCategory === 'All') return portfolio;
-    // Handle subcategories of Projects
-    if (['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].includes(activeCategory)) {
-      return portfolio.filter(item => item.category === 'Projects' && item.application === activeCategory);
+    // Check if activeCategory is a main category or a subcategory
+    const parentCategory = categories.find(c => c.name === activeCategory);
+    if (parentCategory) {
+      // If it's a parent category, we might want to show everything under it
+      // but usually we want to see items specifically assigned to it or its subs if requested
+      return portfolio.filter(item => item.category === activeCategory);
     }
+
+    // Check if it's a subcategory
+    const catWithSub = categories.find(c => c.subCategories.some(s => s.name === activeCategory));
+    if (catWithSub) {
+      return portfolio.filter(item => item.category === catWithSub.name && item.application === activeCategory);
+    }
+
     return portfolio.filter(item => item.category === activeCategory);
-  }, [portfolio, activeCategory]);
+  }, [portfolio, activeCategory, categories]);
 
   const allCategoryImages = useMemo(() => {
     const images: { url: string; title: string; item: PortfolioItem; idx: number }[] = [];
@@ -117,6 +229,38 @@ export default function App() {
       setCurrentFlatIdx(Math.max(0, allCategoryImages.length - 1));
     }
   }, [activeCategory, allCategoryImages.length, currentFlatIdx]);
+
+  const handleReorderCategories = async (newOrder: CategoryData[]) => {
+    setCategories(newOrder);
+    const batch = writeBatch(db);
+    newOrder.forEach((cat, idx) => {
+      batch.update(doc(db, 'categories', cat.id), { order: idx });
+    });
+    await batch.commit();
+  };
+
+  const handleReorderSubCategories = async (catId: string, newSubs: { id: string, name: string }[]) => {
+    setCategories(prev => prev.map(c => 
+      c.id === catId ? { ...c, subCategories: newSubs } : c
+    ));
+    const batch = writeBatch(db);
+    newSubs.forEach((sub, idx) => {
+      batch.update(doc(db, `categories/${catId}/subcategories`, sub.id), { order: idx });
+    });
+    await batch.commit();
+  };
+
+  const handleUpdateCurrentProject = (updates: Partial<PortfolioItem>) => {
+    if (!currentAdminProject) return;
+    setDraftPortfolio(prev => {
+      const exists = prev.some(p => p.id === currentAdminProject.id);
+      if (exists) {
+        return prev.map(p => p.id === currentAdminProject.id ? { ...p, ...updates } : p);
+      } else {
+        return [...prev, { ...currentAdminProject, ...updates }];
+      }
+    });
+  };
 
   const handleAdminAuth = async () => {
     try {
@@ -336,23 +480,24 @@ export default function App() {
           <div className="flex items-center gap-12">
             {/* Categories in Nav - Right Aligned */}
             <div className="hidden md:flex items-center gap-10 text-[13px] font-extralight tracking-[0.05em] lowercase">
-              {CATEGORIES.map((cat) => {
-                if (cat === 'Projects') {
+              {categories.map((cat) => {
+                const isHovered = isProjectsHovered && cat.subCategories.length > 0;
+                
+                if (cat.subCategories.length > 0) {
                   return (
                     <div 
-                      key={cat}
+                      key={cat.id}
                       className="relative h-full flex items-center"
                       onMouseEnter={() => setIsProjectsHovered(true)}
                       onMouseLeave={() => setIsProjectsHovered(false)}
                     >
                       <button
-                        onClick={() => setActiveCategory('Projects')}
-                        className={`transition-colors py-2 lowercase hover:underline underline-offset-8 ${activeCategory === 'Projects' || ['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].includes(activeCategory) ? 'text-black font-normal underline underline-offset-8' : 'text-black'}`}
+                        onClick={() => setActiveCategory(cat.name)}
+                        className={`transition-colors py-2 lowercase hover:underline underline-offset-8 ${activeCategory === cat.name || cat.subCategories.some(s => s.name === activeCategory) ? 'text-black font-normal underline underline-offset-8' : 'text-black'}`}
                       >
-                        {cat} +
+                        {cat.name.toLowerCase()} +
                       </button>
                       
-                      {/* Projects Hover Popover */}
                       <AnimatePresence>
                         {isProjectsHovered && (
                           <motion.div
@@ -362,20 +507,18 @@ export default function App() {
                             className="absolute top-full -right-8 pt-4"
                           >
                             <div className="bg-black p-8 min-w-[240px] rounded-none relative">
-                              {/* Triangle Arrow */}
                               <div className="absolute -top-1.5 right-12 w-3 h-3 bg-black rotate-45" />
-                              
                               <div className="flex flex-col gap-6 font-normal text-[15px] tracking-tight capitalize">
-                                {['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].map((sub) => (
+                                {cat.subCategories.map((sub) => (
                                   <button
-                                    key={sub}
+                                    key={sub.id}
                                     onClick={() => {
-                                      setActiveCategory(sub as any);
+                                      setActiveCategory(sub.name);
                                       setIsProjectsHovered(false);
                                     }}
-                                    className={`text-left underline-offset-8 transition-colors hover:underline decoration-white ${activeCategory === sub ? 'text-white font-semibold underline' : 'text-white'}`}
+                                    className={`text-left underline-offset-8 transition-colors hover:underline decoration-white ${activeCategory === sub.name ? 'text-white font-semibold underline' : 'text-white'}`}
                                   >
-                                    {sub}
+                                    {sub.name}
                                   </button>
                                 ))}
                               </div>
@@ -388,12 +531,12 @@ export default function App() {
                 }
                 
                 return (
-                  <button
-                    key={cat}
-                    onClick={() => setActiveCategory(cat as Category)}
-                    className={`transition-colors py-2 hover:underline underline-offset-8 ${activeCategory === cat ? 'text-black font-normal underline underline-offset-8' : 'text-black'}`}
+                  <button 
+                    key={cat.id}
+                    onClick={() => setActiveCategory(cat.name)}
+                    className={`transition-colors h-full flex items-center hover:underline underline-offset-8 ${activeCategory === cat.name ? 'text-black font-normal underline underline-offset-8' : 'text-black'}`}
                   >
-                    + {cat}
+                    {cat.name.toLowerCase()}
                   </button>
                 );
               })}
@@ -431,14 +574,28 @@ export default function App() {
             >
               <div className="flex flex-col items-center space-y-6">
                 <span className="text-[10px] uppercase font-bold tracking-[0.5em] text-black/30 mb-4">Categories</span>
-                {CATEGORIES.map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => { setActiveCategory(cat as Category); setIsMenuOpen(false); }}
-                    className={`text-2xl font-bold uppercase tracking-widest transition-colors ${activeCategory === cat ? 'text-black' : 'text-black/30'}`}
-                  >
-                    {cat}
-                  </button>
+                {categories.map((cat) => (
+                  <div key={cat.id} className="flex flex-col items-center gap-4">
+                    <button
+                      onClick={() => { setActiveCategory(cat.name); setIsMenuOpen(false); }}
+                      className={`text-2xl font-bold uppercase tracking-widest transition-colors ${activeCategory === cat.name || cat.subCategories.some(s => s.name === activeCategory) ? 'text-black' : 'text-black/30'}`}
+                    >
+                      {cat.name}
+                    </button>
+                    {cat.subCategories.length > 0 && (activeCategory === cat.name || cat.subCategories.some(s => s.name === activeCategory)) && (
+                      <div className="flex flex-col items-center gap-2 mb-4">
+                        {cat.subCategories.map(sub => (
+                          <button
+                            key={sub.id}
+                            onClick={() => { setActiveCategory(sub.name); setIsMenuOpen(false); }}
+                            className={`text-sm tracking-widest uppercase ${activeCategory === sub.name ? 'text-black font-bold' : 'text-black/40'}`}
+                          >
+                            - {sub.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
               
@@ -495,8 +652,23 @@ export default function App() {
                     />
                   </motion.div>
                 ) : (
-                  <div className="flex items-center justify-center h-full text-black/20 uppercase tracking-[0.5em] font-bold">
-                    No content detected in {activeCategory}
+                  <div className="flex flex-col items-center justify-center py-40 text-center space-y-6">
+                    <div className="w-20 h-20 rounded-full bg-black/5 flex items-center justify-center mb-4">
+                      <ImageIcon size={32} className="text-black/10" />
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-2xl font-bold text-brand-text uppercase tracking-[0.2em]">No Content Detected</h3>
+                      <p className="text-brand-muted text-sm max-w-xs mx-auto">
+                        The selected category "{activeCategory}" seems to be empty. 
+                        Please check back later or explore other sections.
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => categories.length > 0 && setActiveCategory(categories[0].name)}
+                      className="px-8 py-3 bg-black text-white rounded-full text-xs font-bold hover:opacity-80 transition-opacity"
+                    >
+                      View Home
+                    </button>
                   </div>
                 )}
               </AnimatePresence>
@@ -636,137 +808,326 @@ export default function App() {
                 </div>
               ) : (
                 <div className="space-y-12">
-                  {/* Add Project Button */}
-                  <button 
-                    onClick={handleAddProject}
-                    className="w-full h-40 border-2 border-dashed border-black/10 rounded-[40px] flex flex-col items-center justify-center gap-2 hover:border-brand-text hover:bg-white transition-all group"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-brand-accent flex items-center justify-center text-brand-muted group-hover:bg-brand-text group-hover:text-white transition-colors">
-                      <ImageIcon size={20} />
-                    </div>
-                    <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-brand-muted group-hover:text-brand-text">포트폴리오 프로젝트 추가</span>
-                  </button>
-
-                  {/* Project Grid */}
-                  <div className="grid md:grid-cols-2 gap-8">
-                    {draftPortfolio.map((item) => (
-                      <div key={item.id} className="bg-white rounded-[40px] p-10 shadow-sm space-y-8 relative group">
-                        <button 
-                          onClick={() => handleRemoveDraft(item.id)}
-                          className="absolute top-6 right-6 p-2 bg-brand-accent text-brand-muted hover:bg-red-500 hover:text-white rounded-full transition-all opacity-0 group-hover:opacity-100"
-                        >
-                          <X size={16} />
-                        </button>
-
-                        <div className="grid grid-cols-2 gap-8">
+                  {/* Unified Project Editor */}
+                  <div className="bg-white rounded-[40px] p-10 shadow-sm space-y-10">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 border-b border-gray-100 pb-10">
+                      <div className="space-y-6 flex-1">
+                        <h3 className="text-xl font-bold uppercase tracking-widest text-brand-text">Image Management</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                           <div className="space-y-2">
-                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">CATEGORY</label>
+                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">SELECT CATEGORY</label>
                             <select 
-                              value={item.category}
-                              onChange={(e) => handleUpdateDraft(item.id, { category: e.target.value as Category })}
-                              className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer"
+                              value={adminSelectedCat}
+                              onChange={(e) => setAdminSelectedCat(e.target.value)}
+                              className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer font-bold"
                             >
-                              {CATEGORIES.filter(c => c !== 'All').map(cat => (
-                                <option key={cat} value={cat}>{cat}</option>
+                              {categories.map(cat => (
+                                <option key={cat.id} value={cat.name}>{cat.name}</option>
                               ))}
                             </select>
                           </div>
                           <div className="space-y-2">
-                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">APPLICATION / SUB-CATEGORY</label>
-                            {item.category === 'Projects' ? (
-                              <select 
-                                value={item.application}
-                                onChange={(e) => handleUpdateDraft(item.id, { application: e.target.value })}
-                                className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer font-medium"
-                              >
-                                <option value="">Select Sub-Category</option>
-                                <option value="SOS">SOS</option>
-                                <option value="Project-L">Project-L</option>
-                                <option value="RudyPang">RudyPang</option>
-                                <option value="Monster-Warload">Monster-Warload</option>
-                              </select>
-                            ) : (
-                              <input 
-                                type="text" 
-                                value={item.application}
-                                onChange={(e) => handleUpdateDraft(item.id, { application: e.target.value })}
-                                className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text font-medium"
-                                placeholder="e.g. Logo Design"
-                              />
-                            )}
+                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">SELECT SUB-CATEGORY</label>
+                            <select 
+                              value={adminSelectedSub}
+                              onChange={(e) => setAdminSelectedSub(e.target.value)}
+                              className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer font-bold"
+                            >
+                              <option value="">None (Main Category Only)</option>
+                              {categories.find(c => c.name === adminSelectedCat)?.subCategories.map(sub => (
+                                <option key={sub.id} value={sub.name}>{sub.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {currentAdminProject && (
+                      <div className="animate-in fade-in slide-in-from-bottom-4 space-y-10">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                          <div className="space-y-2">
+                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">PROJECT TITLE (OPTIONAL)</label>
+                            <input 
+                              type="text" 
+                              value={currentAdminProject.title}
+                              onChange={(e) => handleUpdateCurrentProject({ title: e.target.value })}
+                              className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text font-medium"
+                              placeholder="e.g. SOS Character Design"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">DESCRIPTION (OPTIONAL)</label>
+                            <input 
+                              type="text" 
+                              value={currentAdminProject.description}
+                              onChange={(e) => handleUpdateCurrentProject({ description: e.target.value })}
+                              className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text font-medium"
+                              placeholder="Project summary..."
+                            />
                           </div>
                         </div>
 
-                        <div className="space-y-2">
-                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">PROJECT TITLE</label>
-                          <input 
-                            type="text" 
-                            value={item.title}
-                            onChange={(e) => handleUpdateDraft(item.id, { title: e.target.value })}
-                            className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text font-bold"
-                            placeholder="Title"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">DESCRIPTION</label>
-                          <textarea 
-                            value={item.description}
-                            onChange={(e) => handleUpdateDraft(item.id, { description: e.target.value })}
-                            rows={3}
-                            className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text text-sm resize-none"
-                            placeholder="Description"
-                          />
-                        </div>
-
+                        {/* Image Grid */}
                         <div className="space-y-4">
-                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">IMAGE MANAGER (Drag to Reorder)</label>
-                          <div className="grid grid-cols-1 gap-4">
-                            <Reorder.Group axis="y" values={item.images} onReorder={(newImages) => handleReorderImages(item.id, newImages)} className="space-y-4">
-                              {item.images.map((img, idx) => (
-                                <Reorder.Item key={img.url} value={img} className="flex gap-4 items-center bg-brand-accent p-4 rounded-2xl relative group/img cursor-grab active:cursor-grabbing border border-transparent active:border-brand-text active:bg-white transition-colors shadow-sm">
-                                  <div className="text-black/20 flex-shrink-0">
-                                    <GripVertical size={20} />
-                                  </div>
-                                  <div className="w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 border border-black/5 shadow-sm bg-white">
-                                    <img src={img.url} className="w-full h-full object-cover" alt="" draggable={false} />
-                                  </div>
-                                  <div className="flex-1 space-y-2">
-                                    <label className="text-[8px] uppercase tracking-widest text-black/30 font-bold">IMAGE TITLE</label>
-                                    <input 
-                                      type="text"
-                                      value={img.title || ''}
-                                      placeholder="이미지 전용 타이틀 (비워두면 프로젝트 제목 사용)"
-                                      onChange={(e) => updateImageTitleInDraft(item.id, img.url, e.target.value)}
-                                      className="w-full px-3 py-1 bg-white/50 rounded-lg outline-none focus:ring-1 focus:ring-brand-text text-xs"
-                                    />
-                                  </div>
-                                  <button 
-                                    onClick={() => removeImageFromDraft(item.id, img.url)}
-                                    className="p-2 bg-red-100 text-red-500 hover:bg-red-500 hover:text-white rounded-full transition-all"
-                                  >
-                                    <X size={14} />
-                                  </button>
-                                </Reorder.Item>
-                              ))}
-                            </Reorder.Group>
-                            <label className="h-20 rounded-2xl border-2 border-dashed border-brand-accent flex items-center justify-center text-brand-muted hover:border-brand-text hover:text-brand-text cursor-pointer transition-colors mt-2">
+                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold flex items-center justify-between">
+                            PICTURES ({currentAdminProject.images.length})
+                            <span className="text-[8px] opacity-60">DRAG HANDLES TO REORDER</span>
+                          </label>
+                          <Reorder.Group 
+                            axis="y" 
+                            values={currentAdminProject.images} 
+                            onReorder={(newImgs) => handleUpdateCurrentProject({ images: newImgs })}
+                            className="space-y-3"
+                          >
+                            {currentAdminProject.images.map((img) => (
+                              <Reorder.Item 
+                                key={img.url} 
+                                value={img}
+                                className="flex items-center gap-6 p-4 bg-brand-accent/50 rounded-2xl group border border-transparent hover:border-black/5"
+                              >
+                                <div className="cursor-grab active:cursor-grabbing text-black/10 group-hover:text-black/30 px-2 py-4">
+                                  <GripVertical size={20} />
+                                </div>
+                                <div className="w-20 h-20 rounded-xl overflow-hidden bg-black/5 flex-shrink-0">
+                                  <img src={img.url} alt="" className="w-full h-full object-cover" />
+                                </div>
+                                <div className="flex-1">
+                                  <input 
+                                    type="text"
+                                    value={img.title || ''}
+                                    placeholder="Image title (optional)..."
+                                    onChange={(e) => {
+                                      const newImgs = currentAdminProject.images.map(i => 
+                                        i.url === img.url ? { ...i, title: e.target.value } : i
+                                      );
+                                      handleUpdateCurrentProject({ images: newImgs });
+                                    }}
+                                    className="w-full bg-transparent border-none outline-none text-sm font-medium focus:ring-0"
+                                  />
+                                </div>
+                                <button 
+                                  onClick={() => handleUpdateCurrentProject({ 
+                                    images: currentAdminProject.images.filter(i => i.url !== img.url) 
+                                  })}
+                                  className="p-3 text-black/20 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                >
+                                  <X size={20} />
+                                </button>
+                              </Reorder.Item>
+                            ))}
+                          </Reorder.Group>
+
+                          <div className="pt-4">
+                            <label className="w-full flex flex-col items-center justify-center p-12 border-2 border-dashed border-black/10 rounded-[30px] hover:border-brand-text hover:bg-white transition-all cursor-pointer group">
+                              <ImageIcon size={32} className="text-black/10 group-hover:text-brand-text mb-4" />
+                              <span className="text-sm font-bold text-brand-text uppercase tracking-widest text-[10px]">Add New Pictures</span>
+                              <span className="text-[8px] text-brand-muted mt-2 uppercase tracking-widest opacity-60">JPG, PNG up to 1MB each</span>
                               <input 
                                 type="file" 
                                 multiple 
                                 accept="image/*" 
                                 className="hidden" 
-                                onChange={(e) => handleDraftFileChange(item.id, e.target.files)}
+                                onChange={async (e) => {
+                                  if (!e.target.files) return;
+                                  const fileArray = Array.from(e.target.files) as File[];
+                                  const newImgs: { url: string; title: string }[] = [];
+                                  for (const file of fileArray) {
+                                    try {
+                                      const url = await compressImage(file);
+                                      newImgs.push({ url, title: '' });
+                                    } catch (err) { console.error(err); }
+                                  }
+                                  handleUpdateCurrentProject({ images: [...currentAdminProject.images, ...newImgs] });
+                                }}
                               />
-                              <div className="flex items-center gap-2">
-                                <ImageIcon size={20} />
-                                <span className="text-[10px] font-bold uppercase tracking-widest">Add Images</span>
-                              </div>
                             </label>
                           </div>
                         </div>
                       </div>
-                    ))}
+                    )}
+                  </div>
+
+                  {/* Category Management Section */}
+                  <div className="bg-white rounded-[40px] p-10 shadow-sm space-y-8">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 pb-6">
+                      <h3 className="text-xl font-bold uppercase tracking-widest text-brand-text">Category Structure</h3>
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="text"
+                          value={newCategoryName}
+                          onChange={(e) => setNewCategoryName(e.target.value)}
+                          placeholder="New category name..."
+                          className="px-4 py-2 bg-brand-accent rounded-xl text-sm outline-none focus:ring-1 focus:ring-brand-text w-full md:w-auto font-medium"
+                        />
+                        <button 
+                          onClick={async () => {
+                            if (!newCategoryName.trim()) return;
+                            const id = newCategoryName.toLowerCase().replace(/\s+/g, '-');
+                            try {
+                              await setDoc(doc(db, 'categories', id), {
+                                name: newCategoryName,
+                                order: categories.length
+                              });
+                              setNewCategoryName('');
+                            } catch (e) {
+                              handleFirestoreError(e, OperationType.WRITE, `categories/${id}`);
+                            }
+                          }}
+                          disabled={!newCategoryName.trim()}
+                          className="px-6 py-2 bg-black text-white rounded-xl text-xs font-bold hover:opacity-80 transition-opacity disabled:bg-gray-300 whitespace-nowrap"
+                        >
+                          + ADD
+                        </button>
+                      </div>
+                    </div>
+
+                    <Reorder.Group axis="y" values={categories} onReorder={handleReorderCategories} className="space-y-6">
+                      {categories.map((cat) => (
+                        <Reorder.Item key={cat.id} value={cat} className="space-y-4 p-8 bg-brand-accent rounded-[32px] group relative">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                              <div className="cursor-grab active:cursor-grabbing text-black/10 group-hover:text-black/30 py-2">
+                                <GripVertical size={18} />
+                              </div>
+                              <h4 className="font-bold text-lg flex items-center gap-4 text-brand-text uppercase tracking-tight">
+                                {cat.name}
+                                <button 
+                                  onClick={async () => {
+                                    if (confirm(`Delete "${cat.name}"? This will remove sub-categories but leave projects orphaned until you reassess them.`)) {
+                                      try {
+                                        await deleteDoc(doc(db, 'categories', cat.id));
+                                      } catch (e) {
+                                        handleFirestoreError(e, OperationType.DELETE, `categories/${cat.id}`);
+                                      }
+                                    }
+                                  }}
+                                  className="text-red-400 opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-600"
+                                >
+                                  <X size={18} />
+                                </button>
+                              </h4>
+                            </div>
+                          </div>
+
+                          <Reorder.Group 
+                            axis="x" 
+                            values={cat.subCategories} 
+                            onReorder={(newSubs) => handleReorderSubCategories(cat.id, newSubs)}
+                            className="flex flex-wrap gap-3 items-center"
+                          >
+                            {cat.subCategories.length > 0 && cat.subCategories.map((sub) => (
+                              <Reorder.Item 
+                                key={sub.id} 
+                                value={sub}
+                                className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-black/5 cursor-grab active:cursor-grabbing shadow-sm"
+                              >
+                                <span className="text-xs font-bold text-brand-text">{sub.name}</span>
+                                <button 
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      await deleteDoc(doc(db, `categories/${cat.id}/subcategories`, sub.id));
+                                    } catch (e) {
+                                      handleFirestoreError(e, OperationType.DELETE, `categories/${cat.id}/subcategories/${sub.id}`);
+                                    }
+                                  }}
+                                  className="text-black/20 hover:text-red-500 transition-colors"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </Reorder.Item>
+                            ))}
+                            
+                            <div className="flex items-center gap-2">
+                              <input 
+                                type="text"
+                                placeholder="+ Sub-category"
+                                className="px-4 py-2 bg-white/50 rounded-2xl text-xs outline-none focus:ring-1 focus:ring-brand-text w-36 border border-black/5 font-medium"
+                                onKeyDown={async (e) => {
+                                  if (e.key === 'Enter') {
+                                    const val = (e.target as HTMLInputElement).value;
+                                    if (!val.trim()) return;
+                                    const subId = val.toLowerCase().replace(/\s+/g, '-');
+                                    try {
+                                      await setDoc(doc(db, `categories/${cat.id}/subcategories`, subId), {
+                                        name: val,
+                                        order: cat.subCategories.length
+                                      });
+                                      (e.target as HTMLInputElement).value = '';
+                                    } catch (err) {
+                                      handleFirestoreError(err, OperationType.WRITE, `categories/${cat.id}/subcategories/${subId}`);
+                                    }
+                                  }
+                                }}
+                              />
+                            </div>
+                          </Reorder.Group>
+                        </Reorder.Item>
+                      ))}
+                    </Reorder.Group>
+                  </div>
+
+                  {/* Project List View (Restored for visibility) */}
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between border-b border-black/5 pb-4">
+                      <h3 className="text-lg font-bold uppercase tracking-widest text-[#B5B5B5]">All Portfolio Projects</h3>
+                      <button 
+                        onClick={handleAddProject}
+                        className="text-xs font-bold bg-black text-white px-4 py-2 rounded-xl hover:opacity-80 transition-opacity"
+                      >
+                        + NEW PROJECT
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {draftPortfolio.map((item) => (
+                        <div 
+                          key={item.id} 
+                          onClick={() => {
+                            setAdminSelectedCat(item.category);
+                            setAdminSelectedSub(item.application || '');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className={`p-6 rounded-[32px] border-2 transition-all cursor-pointer group ${
+                            adminSelectedCat === item.category && adminSelectedSub === item.application 
+                            ? 'border-brand-text bg-white shadow-xl' 
+                            : 'border-transparent bg-white/50 hover:bg-white hover:border-black/5'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="space-y-1">
+                              <span className="text-[8px] font-bold uppercase tracking-widest text-black/30">
+                                {item.category} {item.application ? `> ${item.application}` : ''}
+                              </span>
+                              <h4 className="font-bold text-brand-text truncate pr-4">{item.title || 'Untitled Project'}</h4>
+                            </div>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm('Delete this project?')) handleRemoveDraft(item.id);
+                              }}
+                              className="p-2 text-black/10 hover:text-red-500 transition-colors"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                          <div className="aspect-video rounded-2xl bg-black/5 overflow-hidden relative">
+                            {item.images.length > 0 ? (
+                              <img src={item.images[0].url} className="w-full h-full object-cover" alt="" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-black/10">
+                                <ImageIcon size={24} />
+                              </div>
+                            )}
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors" />
+                          </div>
+                          <div className="mt-4 flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-black/40">{item.images.length} images</span>
+                            <span className="text-[10px] font-bold text-brand-text group-hover:underline">Edit details</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
