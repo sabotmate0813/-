@@ -1,7 +1,8 @@
 export type Category = 'All' | 'Illustration' | 'Sketch' | 'Dot Art' | 'Projects';
 
 export interface PortfolioImage {
-  url: string;
+  url?: string;
+  urls?: string[];
   title?: string;
 }
 

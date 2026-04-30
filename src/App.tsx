@@ -31,7 +31,7 @@ export default function App() {
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
   const [categories, setCategories] = useState<CategoryData[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>('');
-  const [currentFlatIdx, setCurrentFlatIdx] = useState(0);
+  const [currentProjIdx, setCurrentProjIdx] = useState(0);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProjectsHovered, setIsProjectsHovered] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(false);
@@ -41,6 +41,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [dataReady, setDataReady] = useState({ portfolio: false, categories: false });
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
 
   // Combined loading control
@@ -191,7 +192,7 @@ export default function App() {
           // Fetch sub-images separately for each item
           const imagesRef = collection(db, `portfolio/${docSnap.id}/images`);
           const imgSnapshot = await getDocs(query(imagesRef, orderBy('order', 'asc')));
-          const images = imgSnapshot.docs.map(d => d.data() as { url: string; title: string });
+          const images = imgSnapshot.docs.map(d => d.data() as any);
           
           return {
             ...itemData,
@@ -221,12 +222,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const filteredPortfolio = useMemo(() => {
+  // 1. Filtered projects for the active category
+  const categoryProjects = useMemo(() => {
     // Check if activeCategory is a main category or a subcategory
     const parentCategory = categories.find(c => c.name === activeCategory);
     if (parentCategory) {
-      // If it's a parent category, we might want to show everything under it
-      // but usually we want to see items specifically assigned to it or its subs if requested
       return portfolio.filter(item => item.category === activeCategory);
     }
 
@@ -246,29 +246,31 @@ export default function App() {
     return subExists ? sub : null;
   };
 
-  const allCategoryImages = useMemo(() => {
-    const images: { url: string; title: string; item: PortfolioItem; idx: number }[] = [];
-    filteredPortfolio.forEach(item => {
-      item.images.forEach((img, i) => {
-        images.push({ 
-          url: img.url, 
-          title: img.title || item.title, 
-          item, 
+  const allSlides = useMemo(() => {
+    const slides: { urls: string[]; title: string; project: PortfolioItem; idx: number }[] = [];
+    categoryProjects.forEach(project => {
+      project.images.forEach((slide, i) => {
+        // Migration: handle if data still has single 'url' property
+        const urls = (slide as any).urls || [(slide as any).url];
+        slides.push({ 
+          urls, 
+          title: slide.title || project.title, 
+          project, 
           idx: i 
         });
       });
     });
-    return images;
-  }, [filteredPortfolio]);
+    return slides;
+  }, [categoryProjects]);
 
-  // Reset flat index when category changes or when it exceeds existing images
+  // Reset slide index when category changes or when it exceeds existing slides
   useEffect(() => {
-    if (allCategoryImages.length === 0) {
-      setCurrentFlatIdx(0);
-    } else if (currentFlatIdx >= allCategoryImages.length) {
-      setCurrentFlatIdx(Math.max(0, allCategoryImages.length - 1));
+    if (allSlides.length === 0) {
+      setCurrentProjIdx(0);
+    } else if (currentProjIdx >= allSlides.length) {
+      setCurrentProjIdx(Math.max(0, allSlides.length - 1));
     }
-  }, [activeCategory, allCategoryImages.length, currentFlatIdx]);
+  }, [activeCategory, allSlides.length, currentProjIdx]);
 
   const handleReorderCategories = async (newOrder: CategoryData[]) => {
     setCategories(newOrder);
@@ -350,7 +352,7 @@ export default function App() {
 
         const validatedMainItem = {
           ...mainData,
-          images: [], // We keep the array empty in main doc OR store only thumbnails here
+          images: [], 
           application: cleanedApplication || '',
           description: item.description || '',
           client: item.client || '',
@@ -370,8 +372,17 @@ export default function App() {
         // Add new images to subcollection
         images.forEach((img, idx) => {
           const imgId = `img_${idx}`;
+          const urls = (img as any).urls || [(img as any).url];
+          
+          // Size check for each slide document (Firestore 1MB limit)
+          const estimateSize = JSON.stringify({ urls, title: img.title || '', order: idx }).length;
+          if (estimateSize > 1048000) {
+            throw new Error(`프로젝트 "${item.title}"의 ${idx + 1}번째 페이지 용량이 너무 큼 (1MB 초과). GIF 크기를 줄여주세요.`);
+          }
+
           batch.set(doc(db, `portfolio/${itemId}/images`, imgId), {
-            ...img,
+            urls,
+            title: img.title || '',
             order: idx
           });
         });
@@ -407,6 +418,38 @@ export default function App() {
     setDraftPortfolio([newItem, ...draftPortfolio]);
   };
 
+  const handleBulkProjectUpload = async (files: FileList | null) => {
+    if (!files || !adminSelectedCat) {
+      alert('먼저 카테고리를 선택해주세요.');
+      return;
+    }
+    setIsUploading(true);
+    
+    const fileArray = Array.from(files);
+    
+    for (const file of fileArray) {
+      try {
+        const url = await compressImage(file);
+        const title = file.name.split('.')[0];
+        
+        const newItem: PortfolioItem = {
+          id: `bulk_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          category: adminSelectedCat,
+          application: adminSelectedSub || '',
+          title: title,
+          description: '',
+          images: [{ urls: [url], title: '' }],
+        };
+        
+        setDraftPortfolio(prev => [newItem, ...prev]);
+      } catch (error) {
+        console.error('Bulk project creation failed:', error);
+      }
+    }
+    setIsUploading(false);
+    alert(`${fileArray.length}개의 프로젝트가 생성되었습니다.`);
+  };
+
   const handleUpdateDraft = (id: string, updates: Partial<PortfolioItem>) => {
     setDraftPortfolio(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
   };
@@ -424,28 +467,32 @@ export default function App() {
         const reader = new FileReader();
         reader.onload = (e) => {
           const result = e.target?.result as string;
-          // Security/Size check: Firestore subcollection document limit is 1MB
-          // Base64 is ~33% larger than binary, so 1MB binary is ~1.37MB base64
-          if (result.length > 1048576 * 1.3) {
-            console.warn('GIF is likely too large for Firestore (>1MB)');
+          // Firestore document limit is 1,048,576 bytes. 
+          if (result.length > 1000000) {
+            console.warn('GIF is very large, might fail to save to Firestore (>1MB limit)');
           }
           resolve(result);
         };
-        reader.onerror = reject;
+        reader.onerror = (err) => {
+          console.error('GIF read failed:', err);
+          reject(new Error('GIF 파일을 읽는데 실패했습니다.'));
+        };
         reader.readAsDataURL(file);
       });
     }
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.readAsDataURL(file);
       reader.onload = (event) => {
         const img = new Image();
         img.src = event.target?.result as string;
+        img.onerror = () => {
+          reject(new Error('이미지 로딩에 실패했습니다.'));
+        };
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 1200;
-          const MAX_HEIGHT = 1200;
+          const MAX_WIDTH = 1400; 
+          const MAX_HEIGHT = 1400;
           let width = img.width;
           let height = img.height;
 
@@ -464,44 +511,60 @@ export default function App() {
           canvas.width = width;
           canvas.height = height;
           const ctx = canvas.getContext('2d');
-          ctx?.drawImage(img, 0, 0, width, height);
+          if (!ctx) {
+            reject(new Error('Canvas context could not be created'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
           
-          // Compress to JPEG with 0.7 quality
-          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+          // Compress to JPEG with 0.8 quality
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.8);
           resolve(compressedBase64);
         };
-        img.onerror = reject;
       };
-      reader.onerror = reject;
+      reader.onerror = () => reject(new Error('파일 읽기 오류'));
+      reader.readAsDataURL(file);
     });
   };
 
-  const handleDraftFileChange = async (id: string, files: FileList | null) => {
-    if (!files) return;
+  const handleDraftFileChange = async (files: FileList | null) => {
+    if (!files || !currentAdminProject) return;
+    setIsUploading(true);
     
     const fileArray = Array.from(files);
-    const newImages: { url: string; title: string }[] = [];
-
+    
     for (const file of fileArray) {
       try {
-        const compressedUrl = await compressImage(file);
-        newImages.push({ url: compressedUrl, title: '' });
+        const url = await compressImage(file);
+        // Using project id to ensure we update the right one even if selection changes during processing
+        const targetId = currentAdminProject.id;
+        
+        setDraftPortfolio(prev => {
+          const exists = prev.some(p => p.id === targetId);
+          if (exists) {
+            return prev.map(p => p.id === targetId ? { ...p, images: [...p.images, { urls: [url], title: '' }] } : p);
+          } else {
+            // If it was a template, we need to add it to draft first
+            return [...prev, { ...currentAdminProject, images: [...currentAdminProject.images, { urls: [url], title: '' }] }];
+          }
+        });
       } catch (error) {
-        console.error('Image compression failed:', error);
+        console.error('Image processing failed:', error);
       }
     }
-
-    if (newImages.length > 0) {
-      setDraftPortfolio(prev => prev.map(item => 
-        item.id === id ? { ...item, images: [...item.images, ...newImages] } : item
-      ));
-    }
+    setIsUploading(false);
   };
 
   const removeImageFromDraft = (projectId: string, imageUrl: string) => {
     setDraftPortfolio(prev => prev.map(item => {
       if (item.id === projectId) {
-        return { ...item, images: item.images.filter(img => img.url !== imageUrl) };
+        return { 
+          ...item, 
+          images: item.images.map(img => ({
+            ...img,
+            urls: ((img as any).urls || [(img as any).url]).filter((u: string) => u !== imageUrl)
+          })).filter(img => img.urls.length > 0)
+        };
       }
       return item;
     }));
@@ -519,20 +582,46 @@ export default function App() {
     }));
   };
 
-  const handleReorderImages = (projectId: string, newImages: { url: string; title: string }[]) => {
+  const handleReorderImages = (projectId: string, newImages: any[]) => {
     setDraftPortfolio(prev => prev.map(item => 
       item.id === projectId ? { ...item, images: newImages } : item
     ));
   };
 
-  const handlePrevImage = () => {
-    if (allCategoryImages.length === 0) return;
-    setCurrentFlatIdx((prev) => (prev - 1 + allCategoryImages.length) % allCategoryImages.length);
+  const handleAddImageToSlide = async (projectId: string, slideIdx: number, files: FileList | null) => {
+    if (!files) return;
+    setIsUploading(true);
+    const fileArray = Array.from(files);
+    for (const file of fileArray) {
+      try {
+        const url = await compressImage(file);
+        setDraftPortfolio(prev => prev.map(item => {
+          if (item.id === projectId) {
+            const newImages = [...item.images];
+            const slide = { ...newImages[slideIdx] };
+            const urls = (slide as any).urls || [(slide as any).url];
+            (slide as any).urls = [...urls, url];
+            delete (slide as any).url;
+            newImages[slideIdx] = slide;
+            return { ...item, images: newImages };
+          }
+          return item;
+        }));
+      } catch (error) {
+        console.error('Add image to slide failed:', error);
+      }
+    }
+    setIsUploading(false);
   };
 
-  const handleNextImage = () => {
-    if (allCategoryImages.length === 0) return;
-    setCurrentFlatIdx((prev) => (prev + 1) % allCategoryImages.length);
+  const handlePrevSlide = () => {
+    if (allSlides.length === 0) return;
+    setCurrentProjIdx((prev) => (prev - 1 + allSlides.length) % allSlides.length);
+  };
+
+  const handleNextSlide = () => {
+    if (allSlides.length === 0) return;
+    setCurrentProjIdx((prev) => (prev + 1) % allSlides.length);
   };
 
   return (
@@ -687,35 +776,79 @@ export default function App() {
       <main className="pt-24">
         {/* Portfolio Section */}
         <section id="portfolio" className="py-10 bg-white min-h-[90vh] flex flex-col">
-          <div className="relative flex-1 flex flex-col justify-center px-4 md:px-6 mt-4">
-            <div className="relative w-full max-w-[2400px] mx-auto overflow-hidden group min-h-[75vh] md:min-h-[90vh] flex items-center justify-center pt-8">
+          <div className="relative flex-1 flex flex-col justify-center px-4 md:px-10 mt-4">
+            
+            <div className="relative w-full max-w-[2400px] mx-auto overflow-hidden group min-h-[80vh] md:min-h-[90vh] flex items-center justify-center pt-8">
               <div className="absolute top-0 left-1/2 -translate-x-1/2 flex gap-3 z-30">
-                {allCategoryImages.map((_, i) => (
+                {allSlides.map((_, i) => (
                   <button 
                     key={i}
-                    onClick={() => setCurrentFlatIdx(i)}
-                    className={`h-0.5 transition-all duration-500 ${i === currentFlatIdx ? 'w-16 bg-black' : 'w-4 bg-black/20 hover:bg-black/40'}`}
+                    onClick={() => setCurrentProjIdx(i)}
+                    className={`h-0.5 transition-all duration-500 ${i === currentProjIdx ? 'w-16 bg-black' : 'w-4 bg-black/20 hover:bg-black/40'}`}
                   />
                 ))}
               </div>
               <AnimatePresence mode="wait">
-                {allCategoryImages.length > 0 && allCategoryImages[currentFlatIdx] ? (
+                {allSlides.length > 0 && allSlides[currentProjIdx] ? (
                   <motion.div
-                    key={`${allCategoryImages[currentFlatIdx].url}-${currentFlatIdx}`}
+                    key={`${allSlides[currentProjIdx].project.id}-${currentProjIdx}`}
                     initial={{ opacity: 0, scale: 0.98 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 1.02 }}
                     transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                    className="absolute inset-0 p-0 flex items-center justify-center pointer-events-none"
+                    className="w-full flex flex-col items-center justify-center py-10"
                   >
-                    <img 
-                      key={allCategoryImages[currentFlatIdx].url}
-                      src={allCategoryImages[currentFlatIdx].url} 
-                      alt={allCategoryImages[currentFlatIdx].title}
-                      className="max-w-full max-h-full w-auto h-auto transition-all duration-1000 object-contain"
-                      style={{ pointerEvents: 'auto' }}
-                      referrerPolicy="no-referrer"
-                    />
+                    {/* Multi-Image Grid Display Area - 간격 제거 및 완전 밀착 */}
+                    <div className={`w-full mx-auto grid gap-0 p-4 justify-items-center ${
+                      allSlides[currentProjIdx].urls.length === 1 ? 'grid-cols-1 max-w-5xl' : 
+                      allSlides[currentProjIdx].urls.length === 2 ? 'grid-cols-1 md:grid-cols-2 max-w-fit w-auto' :
+                      'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 max-w-fit w-auto'
+                    }`}>
+                      {allSlides[currentProjIdx].urls.map((url, uIdx) => (
+                        <motion.div 
+                          key={`${url}-${uIdx}`}
+                          initial={{ opacity: 0, y: 40 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: uIdx * 0.1, duration: 1, ease: [0.16, 1, 0.3, 1] }}
+                          className="relative group/img flex items-center justify-center p-0"
+                        >
+                          <img 
+                            src={url} 
+                            alt={allSlides[currentProjIdx].title}
+                            className="max-w-full max-h-[85vh] w-auto h-auto object-contain transition-all duration-1000"
+                            referrerPolicy="no-referrer"
+                          />
+                        </motion.div>
+                      ))}
+                    </div>
+
+                    {/* Project Header Area - Moved below image */}
+                    <div className="mt-12 text-center">
+                      {allSlides[currentProjIdx].project.application && (
+                        <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-black/40 mb-2">
+                          {allSlides[currentProjIdx].project.application}
+                        </p>
+                      )}
+                      <h3 className="text-xl md:text-2xl font-medium tracking-tight text-brand-text">
+                        {allSlides[currentProjIdx].title}
+                      </h3>
+                      {allSlides[currentProjIdx].project.description && allSlides[currentProjIdx].idx === 0 && (
+                        <p className="mt-4 text-brand-muted text-sm max-w-2xl mx-auto uppercase tracking-widest leading-relaxed opacity-60">
+                          {allSlides[currentProjIdx].project.description}
+                        </p>
+                      )}
+                    </div>
+
+                    {isAdminAuthenticated && (
+                      <div className="mt-8">
+                        <button 
+                          onClick={() => setIsAdminMode(true)}
+                          className="flex items-center gap-2 px-6 py-2 bg-black/5 hover:bg-black/10 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all"
+                        >
+                          <Settings size={12} /> Edit Slide
+                        </button>
+                      </div>
+                    )}
                   </motion.div>
                 ) : !isLoading && activeCategory ? (
                   <div className="flex flex-col items-center justify-center py-40 text-center space-y-6">
@@ -739,48 +872,27 @@ export default function App() {
                 ) : null}
               </AnimatePresence>
 
-              {isAdminAuthenticated && allCategoryImages.length > 0 && (
-                <div className="absolute top-6 right-6 bg-black text-white p-2 rounded-full opacity-80 z-20">
-                  <Settings size={14} />
-                </div>
+              {allSlides.length > 1 && (
+                <>
+                  <div className="absolute top-1/2 -translate-y-1/2 left-4 md:left-14 z-20">
+                    <button 
+                      onClick={handlePrevSlide}
+                      className="p-4 md:p-6 rounded-full bg-black text-white hover:bg-white hover:text-black transition-all border border-black/5 shadow-xl"
+                    >
+                      <ChevronLeft size={24} className="md:w-8 md:h-8" />
+                    </button>
+                  </div>
+                  <div className="absolute top-1/2 -translate-y-1/2 right-4 md:right-14 z-20">
+                    <button 
+                      onClick={handleNextSlide}
+                      className="p-4 md:p-6 rounded-full bg-black text-white hover:bg-white hover:text-black transition-all border border-black/5 shadow-xl"
+                    >
+                      <ChevronRight size={24} className="md:w-8 md:h-8" />
+                    </button>
+                  </div>
+                </>
               )}
             </div>
-
-            {/* Title below image */}
-            {allCategoryImages.length > 0 && allCategoryImages[currentFlatIdx] && (
-              <div className="mt-12 text-center">
-                {getValidSubCategory(allCategoryImages[currentFlatIdx].item.category, allCategoryImages[currentFlatIdx].item.application || '') && (
-                  <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-black/40 mb-2">
-                    {allCategoryImages[currentFlatIdx].item.application}
-                  </p>
-                )}
-                <h3 className="text-3xl font-medium tracking-tight text-brand-text">
-                  {allCategoryImages[currentFlatIdx].title}
-                </h3>
-              </div>
-            )}
-
-            {/* Centered navigation buttons - relative to the active picture area */}
-            {allCategoryImages.length > 1 && (
-              <>
-                <div className="absolute top-1/2 -translate-y-1/2 left-14 z-20">
-                  <button 
-                    onClick={handlePrevImage}
-                    className="p-6 rounded-full bg-black text-white transition-all border border-black/5"
-                  >
-                    <ChevronLeft size={32} />
-                  </button>
-                </div>
-                <div className="absolute top-1/2 -translate-y-1/2 right-14 z-20">
-                  <button 
-                    onClick={handleNextImage}
-                    className="p-6 rounded-full bg-black text-white transition-all border border-black/5"
-                  >
-                    <ChevronRight size={32} />
-                  </button>
-                </div>
-              </>
-            )}
           </div>
         </section>
       </main>
@@ -950,81 +1062,133 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Image Grid */}
+                        {/* Image List - 분홍색 영역 개선 */}
                         <div className="space-y-4">
-                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold flex items-center justify-between">
-                            PICTURES ({currentAdminProject.images.length})
-                            <span className="text-[8px] opacity-60">DRAG HANDLES TO REORDER</span>
-                          </label>
+                          <div className="flex items-center justify-between mb-2 px-2">
+                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">
+                              Pictures ({currentAdminProject.images.length})
+                            </label>
+                            <div className="flex gap-4">
+                              <label className="text-[10px] font-bold bg-white border border-black/10 text-brand-text px-4 py-2 rounded-full hover:bg-black hover:text-white transition-all cursor-pointer flex items-center gap-2">
+                                <ImageIcon size={14} />
+                                ADD MULTIPLE
+                                <input 
+                                  type="file" 
+                                  multiple 
+                                  accept="image/*" 
+                                  className="hidden" 
+                                  disabled={isUploading}
+                                  onChange={(e) => handleDraftFileChange(e.target.files)}
+                                />
+                              </label>
+                              <span className="text-[8px] opacity-40 uppercase tracking-tighter flex items-center">Drag handles to reorder</span>
+                            </div>
+                          </div>
+
                           <Reorder.Group 
                             axis="y" 
                             values={currentAdminProject.images} 
                             onReorder={(newImgs) => handleUpdateCurrentProject({ images: newImgs })}
-                            className="space-y-3"
+                            className="space-y-3 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar"
                           >
-                            {currentAdminProject.images.map((img) => (
-                              <Reorder.Item 
-                                key={img.url} 
-                                value={img}
-                                className="flex items-center gap-6 p-4 bg-brand-accent/50 rounded-2xl group border border-transparent hover:border-black/5"
-                              >
-                                <div className="cursor-grab active:cursor-grabbing text-black/10 group-hover:text-black/30 px-2 py-4">
-                                  <GripVertical size={20} />
-                                </div>
-                                <div className="w-20 h-20 rounded-xl overflow-hidden bg-black/5 flex-shrink-0">
-                                  <img src={img.url} alt="" className="w-full h-full object-cover" />
-                                </div>
-                                <div className="flex-1">
-                                  <input 
-                                    type="text"
-                                    value={img.title || ''}
-                                    placeholder="Image title (optional)..."
-                                    onChange={(e) => {
-                                      const newImgs = currentAdminProject.images.map(i => 
-                                        i.url === img.url ? { ...i, title: e.target.value } : i
-                                      );
-                                      handleUpdateCurrentProject({ images: newImgs });
-                                    }}
-                                    className="w-full bg-transparent border-none outline-none text-sm font-medium focus:ring-0"
-                                  />
-                                </div>
-                                <button 
-                                  onClick={() => handleUpdateCurrentProject({ 
-                                    images: currentAdminProject.images.filter(i => i.url !== img.url) 
-                                  })}
-                                  className="p-3 text-black/20 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                            {currentAdminProject.images.map((img, sIdx) => {
+                              const urls = (img as any).urls || [(img as any).url];
+                              return (
+                                <Reorder.Item 
+                                  key={`${urls[0]}-${sIdx}`} 
+                                  value={img}
+                                  className="flex items-center gap-4 p-4 bg-white rounded-3xl group border-2 border-transparent hover:border-brand-text/5 shadow-sm hover:shadow-xl transition-all"
                                 >
-                                  <X size={20} />
-                                </button>
-                              </Reorder.Item>
-                            ))}
+                                  <div className="cursor-grab active:cursor-grabbing text-black/10 group-hover:text-black/30 p-1">
+                                    <GripVertical size={16} />
+                                  </div>
+                                  
+                                  {/* Thumbnails Grid */}
+                                  <div className="flex -space-x-4 items-center flex-shrink-0">
+                                    {urls.slice(0, 3).map((url, uIdx) => (
+                                      <div key={url} className="w-12 h-12 rounded-xl overflow-hidden bg-black/5 border-2 border-white shadow-sm">
+                                        <img src={url} alt="" className="w-full h-full object-cover" />
+                                      </div>
+                                    ))}
+                                    {urls.length > 3 && (
+                                      <div className="w-12 h-12 rounded-xl bg-black/5 border-2 border-white flex items-center justify-center text-[10px] font-bold text-black/40 shadow-sm">
+                                        +{urls.length - 3}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="flex-1 min-w-0 py-1">
+                                    <input 
+                                      type="text"
+                                      value={img.title || ''}
+                                      placeholder="Page title..."
+                                      onChange={(e) => {
+                                        const newImgs = currentAdminProject.images.map((i, idx) => 
+                                          idx === sIdx ? { ...i, title: e.target.value } : i
+                                        );
+                                        handleUpdateCurrentProject({ images: newImgs });
+                                      }}
+                                      className="w-full bg-transparent border-none outline-none text-[11px] font-bold uppercase tracking-widest focus:ring-0 placeholder:opacity-30 mb-2"
+                                    />
+                                    
+                                    {/* Individual image management within slide */}
+                                    <div className="flex flex-wrap gap-2">
+                                      {urls.map((url, uIdx) => (
+                                        <div key={`${url}-${uIdx}`} className="relative group/subimg">
+                                          <img src={url} className="w-10 h-10 rounded-lg object-cover border border-black/5" />
+                                          <button 
+                                            onClick={() => {
+                                              const newUrls = urls.filter((_, i) => i !== uIdx);
+                                              if (newUrls.length === 0) {
+                                                handleUpdateCurrentProject({ 
+                                                  images: currentAdminProject.images.filter((_, idx) => idx !== sIdx) 
+                                                });
+                                              } else {
+                                                const newImgs = [...currentAdminProject.images];
+                                                newImgs[sIdx] = { ...img, urls: newUrls };
+                                                handleUpdateCurrentProject({ images: newImgs });
+                                              }
+                                            }}
+                                            className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover/subimg:opacity-100 transition-opacity"
+                                          >
+                                            <X size={8} />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <label className="p-2 text-black/20 hover:text-black hover:bg-black/5 rounded-xl transition-all cursor-pointer">
+                                      <ImageIcon size={16} />
+                                      <input 
+                                        type="file" 
+                                        multiple 
+                                        accept="image/*" 
+                                        className="hidden" 
+                                        onChange={(e) => handleAddImageToSlide(currentAdminProject.id, sIdx, e.target.files)}
+                                      />
+                                    </label>
+                                    <button 
+                                      onClick={() => handleUpdateCurrentProject({ 
+                                        images: currentAdminProject.images.filter((_, idx) => idx !== sIdx) 
+                                      })}
+                                      className="p-2 text-black/10 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
+                                </Reorder.Item>
+                              );
+                            })}
                           </Reorder.Group>
 
-                          <div className="pt-4">
-                            <label className="w-full flex flex-col items-center justify-center p-12 border-2 border-dashed border-black/10 rounded-[30px] hover:border-brand-text hover:bg-white transition-all cursor-pointer group">
-                              <ImageIcon size={32} className="text-black/10 group-hover:text-brand-text mb-4" />
-                              <span className="text-sm font-bold text-brand-text uppercase tracking-widest text-[10px]">Add New Pictures</span>
-                              <span className="text-[8px] text-brand-muted mt-2 uppercase tracking-widest opacity-60">JPG, PNG, GIF up to 1MB each</span>
-                              <input 
-                                type="file" 
-                                multiple 
-                                accept="image/*" 
-                                className="hidden" 
-                                onChange={async (e) => {
-                                  if (!e.target.files) return;
-                                  const fileArray = Array.from(e.target.files) as File[];
-                                  const newImgs: { url: string; title: string }[] = [];
-                                  for (const file of fileArray) {
-                                    try {
-                                      const url = await compressImage(file);
-                                      newImgs.push({ url, title: '' });
-                                    } catch (err) { console.error(err); }
-                                  }
-                                  handleUpdateCurrentProject({ images: [...currentAdminProject.images, ...newImgs] });
-                                }}
-                              />
-                            </label>
-                          </div>
+                          {currentAdminProject.images.length === 0 && (
+                            <div className="py-20 border-2 border-dashed border-black/5 rounded-[30px] flex flex-col items-center justify-center opacity-50">
+                              <p className="text-[10px] uppercase font-bold tracking-widest">No images yet</p>
+                              <p className="text-[8px] mt-2">Click 'ADD MULTIPLE' or drop files anywhere</p>
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1154,12 +1318,24 @@ export default function App() {
                   <div className="space-y-6">
                     <div className="flex items-center justify-between border-b border-black/5 pb-4">
                       <h3 className="text-lg font-bold uppercase tracking-widest text-[#B5B5B5]">All Portfolio Projects</h3>
-                      <button 
-                        onClick={handleAddProject}
-                        className="text-xs font-bold bg-black text-white px-4 py-2 rounded-xl hover:opacity-80 transition-opacity"
-                      >
-                        + NEW PROJECT
-                      </button>
+                      <div className="flex gap-2">
+                        <label className="text-xs font-bold bg-[#7557F1] text-white px-4 py-2 rounded-xl hover:opacity-80 transition-opacity cursor-pointer flex items-center gap-2">
+                          + BULK UPLOAD
+                          <input 
+                            type="file" 
+                            multiple 
+                            accept="image/*" 
+                            className="hidden" 
+                            onChange={(e) => handleBulkProjectUpload(e.target.files)}
+                          />
+                        </label>
+                        <button 
+                          onClick={handleAddProject}
+                          className="text-xs font-bold bg-black text-white px-4 py-2 rounded-xl hover:opacity-80 transition-opacity"
+                        >
+                          + NEW PROJECT
+                        </button>
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       {draftPortfolio.map((item) => (
