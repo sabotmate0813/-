@@ -106,9 +106,10 @@ export default function App() {
   const handleAdminAuth = async () => {
     try {
       await signInWithGoogle();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login error:', error);
-      alert('로그인 중 오류가 발생했습니다.');
+      const errorMessage = error?.message || '알 수 없는 오류가 발생했습니다.';
+      alert(`로그인 중 오류가 발생했습니다: ${errorMessage}`);
     }
   };
 
