@@ -417,10 +417,20 @@ export default function App() {
 
   const compressImage = (file: File): Promise<string> => {
     // If it's a GIF, don't compress using canvas because it breaks animation
-    if (file.type === 'image/gif') {
+    const isGif = file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif');
+    
+    if (isGif) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target?.result as string);
+        reader.onload = (e) => {
+          const result = e.target?.result as string;
+          // Security/Size check: Firestore subcollection document limit is 1MB
+          // Base64 is ~33% larger than binary, so 1MB binary is ~1.37MB base64
+          if (result.length > 1048576 * 1.3) {
+            console.warn('GIF is likely too large for Firestore (>1MB)');
+          }
+          resolve(result);
+        };
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
@@ -699,6 +709,7 @@ export default function App() {
                     className="absolute inset-0 p-0 flex items-center justify-center pointer-events-none"
                   >
                     <img 
+                      key={allCategoryImages[currentFlatIdx].url}
                       src={allCategoryImages[currentFlatIdx].url} 
                       alt={allCategoryImages[currentFlatIdx].title}
                       className="max-w-full max-h-full w-auto h-auto transition-all duration-1000 object-contain"
