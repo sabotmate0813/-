@@ -16,10 +16,9 @@ import { INITIAL_PORTFOLIO, CATEGORIES } from './constants';
 export default function App() {
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
   const [activeCategory, setActiveCategory] = useState<Category>('Illustration');
-  const [selectedItem, setSelectedItem] = useState<PortfolioItem | null>(null);
-  const [currentModalImageIdx, setCurrentModalImageIdx] = useState(0);
   const [currentFlatIdx, setCurrentFlatIdx] = useState(0);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isProjectsHovered, setIsProjectsHovered] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
@@ -62,6 +61,10 @@ export default function App() {
 
   const filteredPortfolio = useMemo(() => {
     if (activeCategory === 'All') return portfolio;
+    // Handle subcategories of Projects
+    if (['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].includes(activeCategory)) {
+      return portfolio.filter(item => item.category === 'Projects' && item.application === activeCategory);
+    }
     return portfolio.filter(item => item.category === activeCategory);
   }, [portfolio, activeCategory]);
 
@@ -89,15 +92,6 @@ export default function App() {
     }
   }, [activeCategory, allCategoryImages.length, currentFlatIdx]);
 
-  // Keep modal index in bounds
-  useEffect(() => {
-    if (selectedItem) {
-      if (currentModalImageIdx >= selectedItem.images.length) {
-        setCurrentModalImageIdx(Math.max(0, selectedItem.images.length - 1));
-      }
-    }
-  }, [selectedItem, currentModalImageIdx]);
-
   const handleAdminAuth = () => {
     if (adminPassword === '2892') {
       setIsAdminAuthenticated(true);
@@ -108,11 +102,20 @@ export default function App() {
   };
 
   const handleBulkSave = () => {
-    setPortfolio(draftPortfolio);
-    localStorage.setItem('sketchnub_portfolio', JSON.stringify(draftPortfolio));
-    setIsAdminAuthenticated(false);
-    setIsAdminMode(false);
-    alert('변경사항이 성공적으로 저장되었습니다.');
+    try {
+      setPortfolio(draftPortfolio);
+      localStorage.setItem('sketchnub_portfolio', JSON.stringify(draftPortfolio));
+      setIsAdminAuthenticated(false);
+      setIsAdminMode(false);
+      alert('변경사항이 성공적으로 저장되었습니다.');
+    } catch (error) {
+      console.error('Error saving portfolio:', error);
+      if (error instanceof Error && error.name === 'QuotaExceededError') {
+        alert('저장 공간이 부족합니다. 이미지 용량을 줄이거나 개수를 조절해주세요 (최대 약 5MB).');
+      } else {
+        alert('저장 중 오류가 발생했습니다.');
+      }
+    }
   };
 
   const handleAddProject = () => {
@@ -137,16 +140,23 @@ export default function App() {
 
   const handleDraftFileChange = (id: string, files: FileList | null) => {
     if (!files) return;
-    const project = draftPortfolio.find(p => p.id === id);
-    if (!project) return;
+    
+    const fileArray = Array.from(files);
+    let loadedCount = 0;
+    const newImages: { url: string; title: string }[] = [];
 
-    Array.from(files).forEach(file => {
+    fileArray.forEach(file => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        setDraftPortfolio(prev => prev.map(item => 
-          item.id === id ? { ...item, images: [...item.images, { url: result, title: item.title }] } : item
-        ));
+        newImages.push({ url: result, title: '' });
+        loadedCount++;
+
+        if (loadedCount === fileArray.length) {
+          setDraftPortfolio(prev => prev.map(item => 
+            item.id === id ? { ...item, images: [...item.images, ...newImages] } : item
+          ));
+        }
       };
       reader.readAsDataURL(file);
     });
@@ -184,16 +194,6 @@ export default function App() {
     setCurrentFlatIdx((prev) => (prev + 1) % allCategoryImages.length);
   };
 
-  const handlePrevModalImage = () => {
-    if (!selectedItem) return;
-    setCurrentModalImageIdx((prev) => (prev - 1 + selectedItem.images.length) % selectedItem.images.length);
-  };
-
-  const handleNextModalImage = () => {
-    if (!selectedItem) return;
-    setCurrentModalImageIdx((prev) => (prev + 1) % selectedItem.images.length);
-  };
-
   return (
     <div className="min-h-screen selection:bg-black selection:text-white">
       {/* Navigation */}
@@ -203,16 +203,73 @@ export default function App() {
           
           <div className="flex items-center gap-12">
             {/* Categories in Nav - Right Aligned */}
-            <div className="hidden md:flex items-center gap-10 text-[10px] font-bold uppercase tracking-[0.3em]">
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => setActiveCategory(cat as Category)}
-                  className={`transition-colors py-2 ${activeCategory === cat ? 'text-black border-b border-black' : 'text-black/30 hover:text-black hover:border-b hover:border-black/20'}`}
-                >
-                  {cat}
-                </button>
-              ))}
+            <div className="hidden md:flex items-center gap-10 text-[13px] font-extralight tracking-[0.05em] lowercase">
+              {CATEGORIES.map((cat) => {
+                if (cat === 'Projects') {
+                  return (
+                    <div 
+                      key={cat}
+                      className="relative h-full flex items-center"
+                      onMouseEnter={() => setIsProjectsHovered(true)}
+                      onMouseLeave={() => setIsProjectsHovered(false)}
+                    >
+                      <button
+                        onClick={() => setActiveCategory('Projects')}
+                        className={`transition-colors py-2 lowercase hover:underline underline-offset-8 ${activeCategory === 'Projects' || ['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].includes(activeCategory) ? 'text-black font-normal underline underline-offset-8' : 'text-black'}`}
+                      >
+                        {cat} +
+                      </button>
+                      
+                      {/* Projects Hover Popover */}
+                      <AnimatePresence>
+                        {isProjectsHovered && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 5 }}
+                            className="absolute top-full -right-8 pt-4"
+                          >
+                            <div className="bg-black p-8 min-w-[240px] rounded-none relative">
+                              {/* Triangle Arrow */}
+                              <div className="absolute -top-1.5 right-12 w-3 h-3 bg-black rotate-45" />
+                              
+                              <div className="flex flex-col gap-6 font-normal text-[15px] tracking-tight capitalize">
+                                {['SOS', 'Project-L', 'RudyPang', 'Monster-Warload'].map((sub) => (
+                                  <button
+                                    key={sub}
+                                    onClick={() => {
+                                      setActiveCategory(sub as any);
+                                      setIsProjectsHovered(false);
+                                    }}
+                                    className={`text-left underline-offset-8 transition-colors hover:underline decoration-white ${activeCategory === sub ? 'text-white font-semibold underline' : 'text-white'}`}
+                                  >
+                                    {sub}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  );
+                }
+                
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => setActiveCategory(cat as Category)}
+                    className={`transition-colors py-2 hover:underline underline-offset-8 ${activeCategory === cat ? 'text-black font-normal underline underline-offset-8' : 'text-black'}`}
+                  >
+                    + {cat}
+                  </button>
+                );
+              })}
+              
+              <div className="flex items-center gap-6 ml-6 pl-6 border-l border-black/5">
+                <Instagram size={20} strokeWidth={1.5} className="text-black/30 hover:text-black cursor-pointer transition-colors" />
+                <Mail size={20} strokeWidth={1.5} className="text-black/30 hover:text-black cursor-pointer transition-colors" />
+              </div>
             </div>
 
             <div className="flex items-center space-x-12">
@@ -275,33 +332,33 @@ export default function App() {
 
       <main className="pt-24">
         {/* Portfolio Section */}
-        <section id="portfolio" className="py-20 bg-white min-h-[80vh] flex flex-col">
-          <div className="px-10 mb-8">
-            <h2 className="text-3xl font-medium tracking-tight text-brand-text">
-              {activeCategory.charAt(0).toUpperCase() + activeCategory.slice(1).toLowerCase()}
-            </h2>
-          </div>
-
-          <div className="relative flex-1 flex flex-col justify-center px-10">
-            <div className="relative w-full max-w-[1700px] mx-auto overflow-hidden group min-h-[60vh] md:min-h-[85vh] flex items-center justify-center">
+        <section id="portfolio" className="py-10 bg-white min-h-[90vh] flex flex-col">
+          <div className="relative flex-1 flex flex-col justify-center px-4 md:px-6 mt-4">
+            <div className="relative w-full max-w-[2400px] mx-auto overflow-hidden group min-h-[75vh] md:min-h-[90vh] flex items-center justify-center pt-8">
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 flex gap-3 z-30">
+                {allCategoryImages.map((_, i) => (
+                  <button 
+                    key={i}
+                    onClick={() => setCurrentFlatIdx(i)}
+                    className={`h-0.5 transition-all duration-500 ${i === currentFlatIdx ? 'w-16 bg-black' : 'w-4 bg-black/20 hover:bg-black/40'}`}
+                  />
+                ))}
+              </div>
               <AnimatePresence mode="wait">
                 {allCategoryImages.length > 0 && allCategoryImages[currentFlatIdx] ? (
                   <motion.div
-                    key={allCategoryImages[currentFlatIdx].url}
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-                    className="absolute inset-0 cursor-pointer"
-                    onClick={() => {
-                      setSelectedItem(allCategoryImages[currentFlatIdx].item);
-                      setCurrentModalImageIdx(allCategoryImages[currentFlatIdx].idx);
-                    }}
+                    key={`${allCategoryImages[currentFlatIdx].url}-${currentFlatIdx}`}
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 1.02 }}
+                    transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                    className="absolute inset-0 p-0 flex items-center justify-center pointer-events-none"
                   >
                     <img 
                       src={allCategoryImages[currentFlatIdx].url} 
                       alt={allCategoryImages[currentFlatIdx].title}
-                      className="w-full h-full object-contain transition-all duration-1000 group-hover:scale-[1.02]"
+                      className="max-w-full max-h-full w-auto h-auto transition-all duration-1000 object-contain"
+                      style={{ pointerEvents: 'auto' }}
                       referrerPolicy="no-referrer"
                     />
                   </motion.div>
@@ -337,7 +394,7 @@ export default function App() {
                 <div className="absolute top-1/2 -translate-y-1/2 left-14 z-20">
                   <button 
                     onClick={handlePrevImage}
-                    className="p-6 rounded-full bg-white/10 backdrop-blur-md border border-white/10 text-white hover:bg-white hover:text-black transition-all shadow-xl"
+                    className="p-6 rounded-full bg-black text-white transition-all border border-black/5"
                   >
                     <ChevronLeft size={32} />
                   </button>
@@ -345,23 +402,13 @@ export default function App() {
                 <div className="absolute top-1/2 -translate-y-1/2 right-14 z-20">
                   <button 
                     onClick={handleNextImage}
-                    className="p-6 rounded-full bg-white/10 backdrop-blur-md border border-white/10 text-white hover:bg-white hover:text-black transition-all shadow-xl"
+                    className="p-6 rounded-full bg-black text-white transition-all border border-black/5"
                   >
                     <ChevronRight size={32} />
                   </button>
                 </div>
               </>
             )}
-          </div>
-          
-          <div className="flex justify-center gap-2 py-10">
-            {allCategoryImages.map((_, i) => (
-              <button 
-                key={i}
-                onClick={() => setCurrentFlatIdx(i)}
-                className={`h-0.5 transition-all duration-500 ${i === currentFlatIdx ? 'w-12 bg-black' : 'w-4 bg-black/10 hover:bg-black/30'}`}
-              />
-            ))}
           </div>
         </section>
       </main>
@@ -376,69 +423,7 @@ export default function App() {
           </div>
         </div>
       </footer>
-      <AnimatePresence>
-        {selectedItem && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-white"
-          >
-            <button 
-              onClick={() => setSelectedItem(null)}
-              className="absolute top-10 right-10 p-4 text-black/40 hover:text-black transition-colors z-[110]"
-            >
-              <X size={40} />
-            </button>
-            
-            <div className="w-full h-full flex items-center justify-center overflow-hidden">
-              <div className="relative w-full h-full flex items-center justify-center group p-4 md:p-10">
-                <AnimatePresence mode="wait">
-                  <motion.img 
-                    key={selectedItem.images[currentModalImageIdx]?.url || 'default'} 
-                    src={selectedItem.images[currentModalImageIdx]?.url || 'https://via.placeholder.com/1200x1200?text=No+Image'} 
-                    alt={selectedItem.images[currentModalImageIdx]?.title || selectedItem.title}
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 1.02 }}
-                    transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                    className="w-full h-full object-contain pointer-events-none"
-                    referrerPolicy="no-referrer"
-                  />
-                </AnimatePresence>
-
-                {selectedItem.images.length > 1 && (
-                  <>
-                    <button 
-                      onClick={handlePrevModalImage}
-                      className="absolute left-10 top-1/2 -translate-y-1/2 p-6 bg-white/50 backdrop-blur-md hover:bg-black hover:text-white transition-all text-black/40 rounded-full border border-black/5 shadow-sm"
-                    >
-                      <ChevronLeft size={32} />
-                    </button>
-                    <button 
-                      onClick={handleNextModalImage}
-                      className="absolute right-10 top-1/2 -translate-y-1/2 p-6 bg-white/50 backdrop-blur-md hover:bg-black hover:text-white transition-all text-black/40 rounded-full border border-black/5 shadow-sm"
-                    >
-                      <ChevronRight size={32} />
-                    </button>
-                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-3">
-                       {selectedItem.images.map((_, i) => (
-                         <div 
-                           key={i} 
-                           onClick={() => setCurrentModalImageIdx(i)}
-                           className={`h-0.5 cursor-pointer transition-all duration-500 ${i === currentModalImageIdx ? 'w-16 bg-black' : 'w-4 bg-black/10 hover:bg-black/30'}`} 
-                         />
-                       ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Admin Portal Modal */}
+      {/* Modal/Detail View Area (Disabled) */}
       <AnimatePresence>
         {isAdminMode && (
           <motion.div 
@@ -531,14 +516,28 @@ export default function App() {
                             </select>
                           </div>
                           <div className="space-y-2">
-                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">APPLICATION</label>
-                            <input 
-                              type="text" 
-                              value={item.application}
-                              onChange={(e) => handleUpdateDraft(item.id, { application: e.target.value })}
-                              className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text font-medium"
-                              placeholder="e.g. Logo Design"
-                            />
+                            <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">APPLICATION / SUB-CATEGORY</label>
+                            {item.category === 'Projects' ? (
+                              <select 
+                                value={item.application}
+                                onChange={(e) => handleUpdateDraft(item.id, { application: e.target.value })}
+                                className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text appearance-none cursor-pointer font-medium"
+                              >
+                                <option value="">Select Sub-Category</option>
+                                <option value="SOS">SOS</option>
+                                <option value="Project-L">Project-L</option>
+                                <option value="RudyPang">RudyPang</option>
+                                <option value="Monster-Warload">Monster-Warload</option>
+                              </select>
+                            ) : (
+                              <input 
+                                type="text" 
+                                value={item.application}
+                                onChange={(e) => handleUpdateDraft(item.id, { application: e.target.value })}
+                                className="w-full px-4 py-3 bg-brand-accent rounded-xl outline-none focus:ring-1 focus:ring-brand-text font-medium"
+                                placeholder="e.g. Logo Design"
+                              />
+                            )}
                           </div>
                         </div>
 
