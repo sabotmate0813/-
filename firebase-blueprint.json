@@ -36,6 +36,17 @@
     "/portfolio/{itemId}": {
       "schema": "PortfolioItem",
       "description": "Collection of all portfolio items"
+    },
+    "/portfolio/{itemId}/images/{imageId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "order": { "type": "integer" }
+        }
+      },
+      "description": "Individual images for a portfolio item to bypass 1MB document limit"
     }
   }
 }

@@ -48,21 +48,35 @@ export default function App() {
     const portfolioRef = collection(db, 'portfolio');
     const q = query(portfolioRef);
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: PortfolioItem[] = [];
-      snapshot.forEach((doc) => {
-        items.push(doc.data() as PortfolioItem);
-      });
-      
-      if (items.length > 0) {
-        setPortfolio(items);
-        setDraftPortfolio(items);
-      } else {
-        // Only if empty, use initial
-        setPortfolio(INITIAL_PORTFOLIO);
-        setDraftPortfolio(INITIAL_PORTFOLIO);
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      try {
+        const fetchPromises = snapshot.docs.map(async (docSnap) => {
+          const itemData = docSnap.data() as PortfolioItem;
+          // Fetch sub-images separately for each item
+          const imagesRef = collection(db, `portfolio/${docSnap.id}/images`);
+          const imgSnapshot = await getDocs(query(imagesRef, orderBy('order', 'asc')));
+          const images = imgSnapshot.docs.map(d => d.data() as { url: string; title: string });
+          
+          return {
+            ...itemData,
+            images: images // Use subcollection images
+          };
+        });
+        
+        const items = await Promise.all(fetchPromises);
+        
+        if (items.length > 0) {
+          setPortfolio(items);
+          setDraftPortfolio(items);
+        } else {
+          setPortfolio(INITIAL_PORTFOLIO);
+          setDraftPortfolio(INITIAL_PORTFOLIO);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'portfolio');
       setIsLoading(false);
@@ -139,10 +153,15 @@ export default function App() {
       });
       
       // 3. Set/Update all items in draft
-      draftPortfolio.forEach(item => {
-        // Enforce basic fields even if user left them empty (for rule compliance)
-        const validatedItem = {
-          ...item,
+      for (const item of draftPortfolio) {
+        const itemId = item.id;
+        
+        // Split images: Store them separately to bypass 1MB limit
+        const { images, ...mainData } = item;
+        
+        const validatedMainItem = {
+          ...mainData,
+          images: [], // We keep the array empty in main doc OR store only thumbnails here
           application: item.application || '',
           description: item.description || '',
           client: item.client || '',
@@ -150,8 +169,24 @@ export default function App() {
           process: item.process || [],
           updatedAt: new Date().toISOString()
         };
-        batch.set(doc(db, 'portfolio', item.id), validatedItem);
-      });
+
+        batch.set(doc(db, 'portfolio', itemId), validatedMainItem);
+
+        // Delete existing images in subcollection first to avoid orphans
+        const existingImgs = await getDocs(collection(db, `portfolio/${itemId}/images`));
+        existingImgs.forEach(imgDoc => {
+          batch.delete(imgDoc.ref);
+        });
+
+        // Add new images to subcollection
+        images.forEach((img, idx) => {
+          const imgId = `img_${idx}`;
+          batch.set(doc(db, `portfolio/${itemId}/images`, imgId), {
+            ...img,
+            order: idx
+          });
+        });
+      }
       
       await batch.commit();
       
@@ -160,10 +195,11 @@ export default function App() {
       alert('변경사항이 성공적으로 저장되었습니다.');
     } catch (error: any) {
       console.error('Error saving portfolio:', error);
-      if (error?.message?.includes('too large') || error?.code === 'resource-exhausted') {
-        alert('저장 실패: 이미지 용량이 너무 컸거나 문서 크기 제한(1MB)을 초과했습니다. 고해상도 이미지는 개수를 줄이거나 용량을 압축하여 올려주세요.');
+      const msg = error?.message || '잠시 후 다시 시도해주세요.';
+      if (msg.includes('too large') || error?.code === 'resource-exhausted') {
+        alert('저장 실패: 프로젝트의 전체 용량이 1MB를 초과했습니다. 이미지를 더 압축하거나 개수를 줄여주세요.');
       } else {
-        alert(`저장 중 오류가 발생했습니다: ${error?.message || '잠시 후 다시 시도해주세요.'}`);
+        alert(`저장 중 오류가 발생했습니다: ${msg}`);
       }
     } finally {
       setIsSaving(false);
@@ -190,28 +226,67 @@ export default function App() {
     setDraftPortfolio(prev => prev.filter(item => item.id !== id));
   };
 
-  const handleDraftFileChange = (id: string, files: FileList | null) => {
+  const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 1200;
+          const MAX_HEIGHT = 1200;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          // Compress to JPEG with 0.7 quality
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+          resolve(compressedBase64);
+        };
+        img.onerror = reject;
+      };
+      reader.onerror = reject;
+    });
+  };
+
+  const handleDraftFileChange = async (id: string, files: FileList | null) => {
     if (!files) return;
     
     const fileArray = Array.from(files);
-    let loadedCount = 0;
     const newImages: { url: string; title: string }[] = [];
 
-    fileArray.forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        newImages.push({ url: result, title: '' });
-        loadedCount++;
+    for (const file of fileArray) {
+      try {
+        const compressedUrl = await compressImage(file);
+        newImages.push({ url: compressedUrl, title: '' });
+      } catch (error) {
+        console.error('Image compression failed:', error);
+      }
+    }
 
-        if (loadedCount === fileArray.length) {
-          setDraftPortfolio(prev => prev.map(item => 
-            item.id === id ? { ...item, images: [...item.images, ...newImages] } : item
-          ));
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    if (newImages.length > 0) {
+      setDraftPortfolio(prev => prev.map(item => 
+        item.id === id ? { ...item, images: [...item.images, ...newImages] } : item
+      ));
+    }
   };
 
   const removeImageFromDraft = (projectId: string, imageUrl: string) => {
