@@ -4,11 +4,11 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { 
   Menu, X, Instagram, Mail, ArrowRight, CheckCircle2, 
   ExternalLink, ChevronLeft, ChevronRight, Settings, 
-  Dribbble, Github, Image as ImageIcon
+  Dribbble, Github, Image as ImageIcon, GripVertical
 } from 'lucide-react';
 import { Category, PortfolioItem } from './types';
 import { INITIAL_PORTFOLIO, CATEGORIES } from './constants';
@@ -162,26 +162,31 @@ export default function App() {
     });
   };
 
-  const removeImageFromDraft = (projectId: string, imageIdx: number) => {
+  const removeImageFromDraft = (projectId: string, imageUrl: string) => {
     setDraftPortfolio(prev => prev.map(item => {
       if (item.id === projectId) {
-        const newImages = [...item.images];
-        newImages.splice(imageIdx, 1);
-        return { ...item, images: newImages };
+        return { ...item, images: item.images.filter(img => img.url !== imageUrl) };
       }
       return item;
     }));
   };
 
-  const updateImageTitleInDraft = (projectId: string, imageIdx: number, title: string) => {
+  const updateImageTitleInDraft = (projectId: string, imageUrl: string, title: string) => {
     setDraftPortfolio(prev => prev.map(item => {
       if (item.id === projectId) {
-        const newImages = [...item.images];
-        newImages[imageIdx] = { ...newImages[imageIdx], title };
-        return { ...item, images: newImages };
+        return { 
+          ...item, 
+          images: item.images.map(img => img.url === imageUrl ? { ...img, title } : img) 
+        };
       }
       return item;
     }));
+  };
+
+  const handleReorderImages = (projectId: string, newImages: { url: string; title: string }[]) => {
+    setDraftPortfolio(prev => prev.map(item => 
+      item.id === projectId ? { ...item, images: newImages } : item
+    ));
   };
 
   const handlePrevImage = () => {
@@ -564,31 +569,36 @@ export default function App() {
                         </div>
 
                         <div className="space-y-4">
-                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">IMAGE MANAGER (Titles & Order)</label>
+                          <label className="text-[10px] uppercase tracking-widest text-[#B5B5B5] font-bold">IMAGE MANAGER (Drag to Reorder)</label>
                           <div className="grid grid-cols-1 gap-4">
-                            {item.images.map((img, idx) => (
-                              <div key={idx} className="flex gap-4 items-center bg-brand-accent p-4 rounded-2xl relative group/img">
-                                <div className="w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 border border-black/5 shadow-sm">
-                                  <img src={img.url} className="w-full h-full object-cover" alt="" />
-                                </div>
-                                <div className="flex-1 space-y-2">
-                                  <label className="text-[8px] uppercase tracking-widest text-black/30 font-bold">IMAGE TITLE</label>
-                                  <input 
-                                    type="text"
-                                    value={img.title || ''}
-                                    placeholder="이미지 전용 타이틀 (비워두면 프로젝트 제목 사용)"
-                                    onChange={(e) => updateImageTitleInDraft(item.id, idx, e.target.value)}
-                                    className="w-full px-3 py-1 bg-white/50 rounded-lg outline-none focus:ring-1 focus:ring-brand-text text-xs"
-                                  />
-                                </div>
-                                <button 
-                                  onClick={() => removeImageFromDraft(item.id, idx)}
-                                  className="p-2 bg-red-100 text-red-500 hover:bg-red-500 hover:text-white rounded-full transition-all"
-                                >
-                                  <X size={14} />
-                                </button>
-                              </div>
-                            ))}
+                            <Reorder.Group axis="y" values={item.images} onReorder={(newImages) => handleReorderImages(item.id, newImages)} className="space-y-4">
+                              {item.images.map((img, idx) => (
+                                <Reorder.Item key={img.url} value={img} className="flex gap-4 items-center bg-brand-accent p-4 rounded-2xl relative group/img cursor-grab active:cursor-grabbing border border-transparent active:border-brand-text active:bg-white transition-colors shadow-sm">
+                                  <div className="text-black/20 flex-shrink-0">
+                                    <GripVertical size={20} />
+                                  </div>
+                                  <div className="w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 border border-black/5 shadow-sm bg-white">
+                                    <img src={img.url} className="w-full h-full object-cover" alt="" draggable={false} />
+                                  </div>
+                                  <div className="flex-1 space-y-2">
+                                    <label className="text-[8px] uppercase tracking-widest text-black/30 font-bold">IMAGE TITLE</label>
+                                    <input 
+                                      type="text"
+                                      value={img.title || ''}
+                                      placeholder="이미지 전용 타이틀 (비워두면 프로젝트 제목 사용)"
+                                      onChange={(e) => updateImageTitleInDraft(item.id, img.url, e.target.value)}
+                                      className="w-full px-3 py-1 bg-white/50 rounded-lg outline-none focus:ring-1 focus:ring-brand-text text-xs"
+                                    />
+                                  </div>
+                                  <button 
+                                    onClick={() => removeImageFromDraft(item.id, img.url)}
+                                    className="p-2 bg-red-100 text-red-500 hover:bg-red-500 hover:text-white rounded-full transition-all"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </Reorder.Item>
+                              ))}
+                            </Reorder.Group>
                             <label className="h-20 rounded-2xl border-2 border-dashed border-brand-accent flex items-center justify-center text-brand-muted hover:border-brand-text hover:text-brand-text cursor-pointer transition-colors mt-2">
                               <input 
                                 type="file" 
