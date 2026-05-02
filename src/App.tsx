@@ -32,6 +32,7 @@ export default function App() {
   const [categories, setCategories] = useState<CategoryData[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>('');
   const [currentProjIdx, setCurrentProjIdx] = useState(0);
+  const [direction, setDirection] = useState(0); // -1 for left, 1 for right
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProjectsHovered, setIsProjectsHovered] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(false);
@@ -615,13 +616,15 @@ export default function App() {
   };
 
   const handlePrevSlide = () => {
-    if (allSlides.length === 0) return;
-    setCurrentProjIdx((prev) => (prev - 1 + allSlides.length) % allSlides.length);
+    if (allSlides.length === 0 || currentProjIdx === 0) return;
+    setDirection(-1);
+    setCurrentProjIdx((prev) => prev - 1);
   };
 
   const handleNextSlide = () => {
-    if (allSlides.length === 0) return;
-    setCurrentProjIdx((prev) => (prev + 1) % allSlides.length);
+    if (allSlides.length === 0 || currentProjIdx === allSlides.length - 1) return;
+    setDirection(1);
+    setCurrentProjIdx((prev) => prev + 1);
   };
 
   return (
@@ -778,118 +781,122 @@ export default function App() {
         <section id="portfolio" className="py-10 bg-white min-h-[90vh] flex flex-col">
           <div className="relative flex-1 flex flex-col justify-center px-4 md:px-10 mt-4">
             
-            <div className="relative w-full max-w-[2400px] mx-auto overflow-hidden group min-h-[80vh] md:min-h-[90vh] flex items-center justify-center pt-8">
+            <div className="relative w-full max-w-[2400px] mx-auto overflow-hidden group min-h-[85vh] md:min-h-[90vh] flex flex-col items-center pt-8">
               <div className="absolute top-0 left-1/2 -translate-x-1/2 flex gap-3 z-30">
                 {allSlides.map((_, i) => (
                   <button 
                     key={i}
-                    onClick={() => setCurrentProjIdx(i)}
+                    onClick={() => {
+                      setDirection(i > currentProjIdx ? 1 : -1);
+                      setCurrentProjIdx(i);
+                    }}
                     className={`h-0.5 transition-all duration-500 ${i === currentProjIdx ? 'w-16 bg-black' : 'w-4 bg-black/20 hover:bg-black/40'}`}
                   />
                 ))}
               </div>
-              <AnimatePresence mode="wait">
-                {allSlides.length > 0 && allSlides[currentProjIdx] ? (
-                  <motion.div
-                    key={`${allSlides[currentProjIdx].project.id}-${currentProjIdx}`}
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 1.02 }}
+
+              {/* Slider Container - Carousel with Peek Effect */}
+              <div className="relative w-full flex-1 flex items-center overflow-visible">
+                {allSlides.length > 0 ? (
+                  <motion.div 
+                    className="flex items-center"
+                    animate={{ x: `calc(50vw - ${(currentProjIdx * 85) + 42.5}vw)` }}
                     transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                    className="w-full flex flex-col items-center justify-center py-10"
+                    style={{ width: `${allSlides.length * 85}vw`, display: 'flex' }}
                   >
-                    {/* Multi-Image Grid Display Area - 간격 제거 및 완전 밀착 */}
-                    <div className={`w-full mx-auto grid gap-0 p-4 justify-items-center ${
-                      allSlides[currentProjIdx].urls.length === 1 ? 'grid-cols-1 max-w-5xl' : 
-                      allSlides[currentProjIdx].urls.length === 2 ? 'grid-cols-1 md:grid-cols-2 max-w-fit w-auto' :
-                      'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 max-w-fit w-auto'
-                    }`}>
-                      {allSlides[currentProjIdx].urls.map((url, uIdx) => (
-                        <motion.div 
-                          key={`${url}-${uIdx}`}
-                          initial={{ opacity: 0, y: 40 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: uIdx * 0.1, duration: 1, ease: [0.16, 1, 0.3, 1] }}
-                          className="relative group/img flex items-center justify-center p-0"
-                        >
-                          <img 
-                            src={url} 
-                            alt={allSlides[currentProjIdx].title}
-                            className="max-w-full max-h-[85vh] w-auto h-auto object-contain transition-all duration-1000"
-                            referrerPolicy="no-referrer"
-                          />
-                        </motion.div>
-                      ))}
-                    </div>
+                    {allSlides.map((slide, sIdx) => (
+                      <div 
+                        key={`${slide.project.id}-${sIdx}`}
+                        className="flex flex-col items-center justify-center transition-all duration-1000 px-2 md:px-4"
+                        style={{ 
+                          width: '85vw', 
+                          opacity: sIdx === currentProjIdx ? 1 : 0.2,
+                          transform: sIdx === currentProjIdx ? 'scale(1)' : 'scale(0.9)'
+                        }}
+                      >
+                        {/* Multi-Image Grid Display Area */}
+                        <div className={`w-full mx-auto grid gap-0 justify-items-center ${
+                          slide.urls.length === 1 ? 'grid-cols-1 max-w-[80vw] md:max-w-6xl' : 
+                          slide.urls.length === 2 ? 'grid-cols-1 md:grid-cols-2 max-w-fit w-auto' :
+                          'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 max-w-fit w-auto'
+                        }`}>
+                          {slide.urls.map((url, uIdx) => (
+                            <div 
+                              key={`${url}-${uIdx}`}
+                              className="relative group/img flex items-center justify-center p-0"
+                            >
+                              <img 
+                                src={url} 
+                                alt={slide.title}
+                                className="max-w-full max-h-[75vh] md:max-h-[82vh] w-auto h-auto object-contain shadow-2xl md:shadow-none"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          ))}
+                        </div>
 
-                    {/* Project Header Area - Moved below image */}
-                    <div className="mt-12 text-center">
-                      {allSlides[currentProjIdx].project.application && (
-                        <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-black/40 mb-2">
-                          {allSlides[currentProjIdx].project.application}
-                        </p>
-                      )}
-                      <h3 className="text-xl md:text-2xl font-medium tracking-tight text-brand-text">
-                        {allSlides[currentProjIdx].title}
-                      </h3>
-                      {allSlides[currentProjIdx].project.description && allSlides[currentProjIdx].idx === 0 && (
-                        <p className="mt-4 text-brand-muted text-sm max-w-2xl mx-auto uppercase tracking-widest leading-relaxed opacity-60">
-                          {allSlides[currentProjIdx].project.description}
-                        </p>
-                      )}
-                    </div>
-
-                    {isAdminAuthenticated && (
-                      <div className="mt-8">
-                        <button 
-                          onClick={() => setIsAdminMode(true)}
-                          className="flex items-center gap-2 px-6 py-2 bg-black/5 hover:bg-black/10 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all"
-                        >
-                          <Settings size={12} /> Edit Slide
-                        </button>
+                        {/* Project Header Area */}
+                        <div className={`mt-8 text-center transition-all duration-1000 ${sIdx === currentProjIdx ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+                          {slide.project.application && (
+                            <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-black/40 mb-2">
+                              {slide.project.application}
+                            </p>
+                          )}
+                          <h3 className="text-xl md:text-2xl font-medium tracking-tight text-brand-text">
+                            {slide.title}
+                          </h3>
+                        </div>
                       </div>
-                    )}
+                    ))}
                   </motion.div>
-                ) : !isLoading && activeCategory ? (
+                ) : !isLoading && activeCategory && (
                   <div className="flex flex-col items-center justify-center py-40 text-center space-y-6">
                     <div className="w-20 h-20 rounded-full bg-black/5 flex items-center justify-center mb-4">
                       <ImageIcon size={32} className="text-black/10" />
                     </div>
                     <div className="space-y-2">
-                      <h3 className="text-2xl font-bold text-brand-text uppercase tracking-[0.2em]">No Content Detected</h3>
+                      <h3 className="text-2xl font-bold text-brand-text uppercase tracking-[0.2em]">이 카테고리는 비어있습니다</h3>
                       <p className="text-brand-muted text-sm max-w-xs mx-auto">
-                        The selected category "{activeCategory}" seems to be empty. 
-                        Please check back later or explore other sections.
+                        선택하신 "{activeCategory}" 카테고리에 등록된 프로젝트가 없습니다.
                       </p>
                     </div>
-                    <button 
-                      onClick={() => categories.length > 0 && setActiveCategory(categories[0].name)}
-                      className="px-8 py-3 bg-black text-white rounded-full text-xs font-bold hover:opacity-80 transition-opacity"
-                    >
-                      View Home
-                    </button>
                   </div>
-                ) : null}
-              </AnimatePresence>
+                )}
+              </div>
+
+              {isAdminAuthenticated && allSlides[currentProjIdx] && (
+                <div className="mt-8 z-30">
+                  <button 
+                    onClick={() => setIsAdminMode(true)}
+                    className="flex items-center gap-2 px-6 py-2 bg-black/5 hover:bg-black/10 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all"
+                  >
+                    <Settings size={12} /> Edit Slide
+                  </button>
+                </div>
+              )}
 
               {allSlides.length > 1 && (
                 <>
-                  <div className="absolute top-1/2 -translate-y-1/2 left-4 md:left-14 z-20">
-                    <button 
-                      onClick={handlePrevSlide}
-                      className="p-4 md:p-6 rounded-full bg-black text-white hover:bg-white hover:text-black transition-all border border-black/5 shadow-xl"
-                    >
-                      <ChevronLeft size={24} className="md:w-8 md:h-8" />
-                    </button>
-                  </div>
-                  <div className="absolute top-1/2 -translate-y-1/2 right-4 md:right-14 z-20">
-                    <button 
-                      onClick={handleNextSlide}
-                      className="p-4 md:p-6 rounded-full bg-black text-white hover:bg-white hover:text-black transition-all border border-black/5 shadow-xl"
-                    >
-                      <ChevronRight size={24} className="md:w-8 md:h-8" />
-                    </button>
-                  </div>
+                  {currentProjIdx > 0 && (
+                    <div className="absolute top-1/2 -translate-y-1/2 left-4 md:left-14 z-20 transition-opacity duration-300">
+                      <button 
+                        onClick={handlePrevSlide}
+                        className="p-4 md:p-6 rounded-full bg-black text-white hover:bg-white hover:text-black transition-all border border-black/5 shadow-xl"
+                      >
+                        <ChevronLeft size={24} className="md:w-8 md:h-8" />
+                      </button>
+                    </div>
+                  )}
+                  {currentProjIdx < allSlides.length - 1 && (
+                    <div className="absolute top-1/2 -translate-y-1/2 right-4 md:right-14 z-20 transition-opacity duration-300">
+                      <button 
+                        onClick={handleNextSlide}
+                        className="p-4 md:p-6 rounded-full bg-black text-white hover:bg-white hover:text-black transition-all border border-black/5 shadow-xl"
+                      >
+                        <ChevronRight size={24} className="md:w-8 md:h-8" />
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
