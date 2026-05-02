@@ -329,7 +329,23 @@ export default function App() {
     setIsSaving(true);
     
     try {
-      const batch = writeBatch(db);
+      let batch = writeBatch(db);
+      let opsCount = 0;
+
+      const commitBatch = async () => {
+        if (opsCount > 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+          opsCount = 0;
+        }
+      };
+
+      const addOp = async (num = 1) => {
+        opsCount += num;
+        if (opsCount >= 450) {
+          await commitBatch();
+        }
+      };
       
       // 1. Get current IDs in DB to handle deletions
       const snapshot = await getDocs(collection(db, 'portfolio'));
@@ -337,20 +353,18 @@ export default function App() {
       const draftIds = draftPortfolio.map(item => item.id);
       
       // 2. Delete items that were removed in draft
-      dbIds.forEach(id => {
+      for (const id of dbIds) {
         if (!draftIds.includes(id)) {
           batch.delete(doc(db, 'portfolio', id));
+          await addOp();
         }
-      });
+      }
       
       // 3. Set/Update all items in draft
       for (const item of draftPortfolio) {
         const itemId = item.id;
         
-        // Split images: Store them separately to bypass 1MB limit
         const { images, ...mainData } = item;
-        
-        // Clean application if it's not a valid sub-category
         const catDef = categories.find(c => c.name === item.category);
         const isValidSub = catDef?.subCategories.some(s => s.name === item.application);
         const cleanedApplication = isValidSub ? item.application : '';
@@ -367,19 +381,22 @@ export default function App() {
         };
 
         batch.set(doc(db, 'portfolio', itemId), validatedMainItem);
+        await addOp();
 
         // Delete existing images in subcollection first to avoid orphans
-        const existingImgs = await getDocs(collection(db, `portfolio/${itemId}/images`));
-        existingImgs.forEach(imgDoc => {
+        const imagesRef = collection(db, `portfolio/${itemId}/images`);
+        const existingImgs = await getDocs(imagesRef);
+        for (const imgDoc of existingImgs.docs) {
           batch.delete(imgDoc.ref);
-        });
+          await addOp();
+        }
 
         // Add new images to subcollection
-        images.forEach((img, idx) => {
+        for (let idx = 0; idx < images.length; idx++) {
+          const img = images[idx];
           const imgId = `img_${idx}`;
           const urls = (img as any).urls || [(img as any).url];
           
-          // Size check for each slide document (Firestore 1MB limit)
           const estimateSize = JSON.stringify({ urls, title: img.title || '', order: idx }).length;
           if (estimateSize > 1048000) {
             throw new Error(`프로젝트 "${item.title}"의 ${idx + 1}번째 페이지 용량이 너무 큼 (1MB 초과). GIF 크기를 줄여주세요.`);
@@ -390,21 +407,27 @@ export default function App() {
             title: img.title || '',
             order: idx
           });
-        });
+          await addOp();
+        }
       }
       
-      await batch.commit();
+      await commitBatch();
       
       setIsAdminMode(false);
       setIsAdminAuthenticated(false);
       alert('변경사항이 성공적으로 저장되었습니다.');
     } catch (error: any) {
       console.error('Error saving portfolio:', error);
-      const msg = error?.message || '잠시 후 다시 시도해주세요.';
-      if (msg.includes('too large') || error?.code === 'resource-exhausted') {
-        alert('저장 실패: 프로젝트의 전체 용량이 1MB를 초과했습니다. 이미지를 더 압축하거나 개수를 줄여주세요.');
-      } else {
-        alert(`저장 중 오류가 발생했습니다: ${msg}`);
+      try {
+        handleFirestoreError(error, OperationType.WRITE, 'portfolio-bulk-save');
+      } catch (err: any) {
+        const errData = JSON.parse(err.message);
+        const msg = errData.error || '잠시 후 다시 시도해주세요.';
+        if (msg.includes('too large') || msg.includes('resource-exhausted')) {
+          alert('저장 실패: 프로젝트의 전체 용량이 1MB를 초과했습니다. 이미지를 더 압축하거나 개수를 줄여주세요.');
+        } else {
+          alert(`저장 중 오류가 발생했습니다: ${msg}`);
+        }
       }
     } finally {
       setIsSaving(false);

@@ -43,6 +43,7 @@ service cloud.firestore {
              (!('client' in data) || (data.client is string && data.client.size() <= 512)) &&
              (!('role' in data) || (data.role is string && data.role.size() <= 512)) &&
              (!('process' in data) || (data.process is list)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string)) &&
              data.images is list && data.images.size() <= 50;
     }
 
