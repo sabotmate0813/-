@@ -266,12 +266,16 @@ export default function App() {
 
   // Reset slide index when category changes or when it exceeds existing slides
   useEffect(() => {
+    setCurrentProjIdx(0);
+  }, [activeCategory]);
+
+  useEffect(() => {
     if (allSlides.length === 0) {
       setCurrentProjIdx(0);
-    } else if (currentProjIdx >= allSlides.length) {
-      setCurrentProjIdx(Math.max(0, allSlides.length - 1));
+    } else if (currentProjIdx >= allSlides.length && allSlides.length > 0) {
+      setCurrentProjIdx(allSlides.length - 1);
     }
-  }, [activeCategory, allSlides.length, currentProjIdx]);
+  }, [allSlides.length, currentProjIdx]);
 
   const handleReorderCategories = async (newOrder: CategoryData[]) => {
     setCategories(newOrder);
