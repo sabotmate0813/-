@@ -349,7 +349,8 @@ export default function App() {
       
       // 1. Get current IDs in DB to handle deletions
       const snapshot = await getDocs(collection(db, 'portfolio'));
-      const dbIds = snapshot.docs.map(doc => doc.id);
+      const dbItems = new Map(snapshot.docs.map(doc => [doc.id, doc.data()]));
+      const dbIds = Array.from(dbItems.keys());
       const draftIds = draftPortfolio.map(item => item.id);
       
       // 2. Delete items that were removed in draft
@@ -363,6 +364,7 @@ export default function App() {
       // 3. Set/Update all items in draft
       for (const item of draftPortfolio) {
         const itemId = item.id;
+        const existingMainData = dbItems.get(itemId);
         
         const { images, ...mainData } = item;
         const catDef = categories.find(c => c.name === item.category);
@@ -377,37 +379,62 @@ export default function App() {
           client: item.client || '',
           role: item.role || '',
           process: item.process || [],
-          updatedAt: new Date().toISOString()
+          // updatedAt will be added only if data actually changed
         };
 
-        batch.set(doc(db, 'portfolio', itemId), validatedMainItem);
-        await addOp();
+        // Compare main data (excluding updatedAt)
+        const hasMainDataChanged = !existingMainData || (() => {
+          const { updatedAt: _, ...oldData } = existingMainData as any;
+          return JSON.stringify(oldData) !== JSON.stringify(validatedMainItem);
+        })();
 
-        // Delete existing images in subcollection first to avoid orphans
-        const imagesRef = collection(db, `portfolio/${itemId}/images`);
-        const existingImgs = await getDocs(imagesRef);
-        for (const imgDoc of existingImgs.docs) {
-          batch.delete(imgDoc.ref);
+        if (hasMainDataChanged) {
+          batch.set(doc(db, 'portfolio', itemId), {
+            ...validatedMainItem,
+            updatedAt: new Date().toISOString()
+          });
           await addOp();
         }
 
-        // Add new images to subcollection
+        // Handle images subcollection intelligently
+        const imagesRef = collection(db, `portfolio/${itemId}/images`);
+        const existingImgsSnapshot = await getDocs(imagesRef);
+        const existingImgsMap = new Map(existingImgsSnapshot.docs.map(d => [d.id, d.data()]));
+        
+        // Track which existing image IDs were touched
+        const touchedImgIds = new Set<string>();
+
         for (let idx = 0; idx < images.length; idx++) {
           const img = images[idx];
           const imgId = `img_${idx}`;
           const urls = (img as any).urls || [(img as any).url];
           
-          const estimateSize = JSON.stringify({ urls, title: img.title || '', order: idx }).length;
-          if (estimateSize > 1048000) {
-            throw new Error(`프로젝트 "${item.title}"의 ${idx + 1}번째 페이지 용량이 너무 큼 (1MB 초과). GIF 크기를 줄여주세요.`);
-          }
-
-          batch.set(doc(db, `portfolio/${itemId}/images`, imgId), {
+          const newImgData = {
             urls,
             title: img.title || '',
             order: idx
-          });
-          await addOp();
+          };
+
+          const existingImgData = existingImgsMap.get(imgId);
+          const hasImgChanged = !existingImgData || JSON.stringify(existingImgData) !== JSON.stringify(newImgData);
+
+          if (hasImgChanged) {
+            const estimateSize = JSON.stringify(newImgData).length;
+            if (estimateSize > 1048000) {
+              throw new Error(`프로젝트 "${item.title}"의 ${idx + 1}번째 페이지 용량이 너무 큼 (1MB 초과).`);
+            }
+            batch.set(doc(db, `portfolio/${itemId}/images`, imgId), newImgData);
+            await addOp();
+          }
+          touchedImgIds.add(imgId);
+        }
+
+        // Delete images that are no longer in the item
+        for (const existingId of existingImgsMap.keys()) {
+          if (!touchedImgIds.has(existingId)) {
+            batch.delete(doc(db, `portfolio/${itemId}/images`, existingId));
+            await addOp();
+          }
         }
       }
       
@@ -891,16 +918,7 @@ export default function App() {
                 )}
               </div>
 
-              {isAdminAuthenticated && allSlides[currentProjIdx] && (
-                <div className="mt-8 z-30">
-                  <button 
-                    onClick={() => setIsAdminMode(true)}
-                    className="flex items-center gap-2 px-6 py-2 bg-black/5 hover:bg-black/10 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all"
-                  >
-                    <Settings size={12} /> Edit Slide
-                  </button>
-                </div>
-              )}
+
 
               {allSlides.length > 1 && (
                 <>
